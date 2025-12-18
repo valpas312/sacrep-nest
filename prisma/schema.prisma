@@ -1,0 +1,72 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+model categorias {
+  id        Int         @id @default(autoincrement())
+  nombre    String      @db.VarChar(255)
+  productos productos[]
+}
+
+model fabricantes {
+  id        Int         @id @default(autoincrement())
+  nombre    String      @db.VarChar(255)
+  productos productos[]
+  vehiculos vehiculos[]
+}
+
+model marcas {
+  id        Int         @id @default(autoincrement())
+  nombre    String      @db.VarChar(255)
+  imagen    String?
+  productos productos[]
+}
+
+model producto_vehiculos {
+  id          Int       @id @default(autoincrement())
+  producto_id Int
+  vehiculo_id Int
+  productos   productos @relation(fields: [producto_id], references: [id], onDelete: Cascade, onUpdate: NoAction)
+  vehiculos   vehiculos @relation(fields: [vehiculo_id], references: [id], onDelete: Cascade, onUpdate: NoAction)
+
+  @@unique([producto_id, vehiculo_id])
+  @@index([producto_id], map: "idx_prodveh_producto")
+  @@index([vehiculo_id], map: "idx_prodveh_vehiculo")
+}
+
+model productos {
+  id                 Int                  @id @default(autoincrement())
+  sku                String?              @db.VarChar(255)
+  nombre             String               @db.Text
+  imagen             String?
+  hay_stock          Boolean?             @default(true)
+  marca              Int?
+  categoria          Int?
+  fabricante         Int?
+  producto_vehiculos producto_vehiculos[]
+  precio        Float      @default(0)
+  categorias         categorias?          @relation(fields: [categoria], references: [id], onUpdate: NoAction)
+  fabricantes        fabricantes?         @relation(fields: [fabricante], references: [id], onUpdate: NoAction)
+  marcas             marcas?              @relation(fields: [marca], references: [id], onUpdate: NoAction)
+
+  @@index([categoria], map: "idx_productos_categoria")
+  @@index([fabricante], map: "idx_productos_fabricante")
+  @@index([marca], map: "idx_productos_marca")
+}
+
+model vehiculos {
+  id                 Int                  @id @default(autoincrement())
+  nombre             String               @db.VarChar(255)
+  desde              Int?
+  hasta              Int?
+  fabricante_id      Int?
+  producto_vehiculos producto_vehiculos[]
+  fabricantes        fabricantes?         @relation(fields: [fabricante_id], references: [id], onUpdate: NoAction)
+
+  @@index([fabricante_id], map: "idx_vehiculos_fabricante")
+}
