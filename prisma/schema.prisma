@@ -49,7 +49,7 @@ model productos {
   categoria          Int?
   fabricante         Int?
   producto_vehiculos producto_vehiculos[]
-  precio        Float
+  precio        Float      @default(0)
   categorias         categorias?          @relation(fields: [categoria], references: [id], onUpdate: NoAction)
   fabricantes        fabricantes?         @relation(fields: [fabricante], references: [id], onUpdate: NoAction)
   marcas             marcas?              @relation(fields: [marca], references: [id], onUpdate: NoAction)
