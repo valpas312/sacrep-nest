@@ -1,6 +1,12 @@
 import { ApiProperty } from '@nestjs/swagger';
 import { Type } from 'class-transformer';
-import { IsBoolean, IsInt, IsOptional, IsString } from 'class-validator';
+import {
+  IsBoolean,
+  IsInt,
+  IsNumber,
+  IsOptional,
+  IsString,
+} from 'class-validator';
 
 export class CreateProductoDto {
   @ApiProperty({ example: 'LUK-6001', required: false })
@@ -30,6 +36,7 @@ export class CreateProductoDto {
 
   @ApiProperty({ example: 12345.99 })
   @Type(() => Number)
+  @IsNumber()
   precio: number;
 
   @ApiProperty({ example: 3 })
