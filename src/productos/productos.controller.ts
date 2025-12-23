@@ -14,6 +14,7 @@ import { CreateProductoDto } from './dto/create-producto.dto';
 import { UpdateProductoDto } from './dto/update-producto.dto';
 import { BuscarProductosDto } from './dto/buscar-productos.dto';
 import { BatchDeleteProductosDto } from './dto/batch-delete-productos.dto';
+import { BatchCreateProductosDto } from './dto/batch-create-productos.dto';
 // import { BatchUpdateProductosDto } from './dto/batch-update-productos.dto';
 
 @Controller('productos')
@@ -23,6 +24,11 @@ export class ProductosController {
   @Post()
   create(@Body() createProductoDto: CreateProductoDto) {
     return this.productosService.create(createProductoDto);
+  }
+
+  @Post('batch')
+  batchCreate(@Body() dto: BatchCreateProductosDto) {
+    return this.productosService.batchCreate(dto);
   }
 
   @Get()

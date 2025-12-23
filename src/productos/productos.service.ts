@@ -4,6 +4,7 @@ import { CreateProductoDto } from './dto/create-producto.dto';
 import { UpdateProductoDto } from './dto/update-producto.dto';
 import { BuscarProductosDto } from './dto/buscar-productos.dto';
 import { BatchDeleteProductosDto } from './dto/batch-delete-productos.dto';
+import { BatchCreateProductosDto } from './dto/batch-create-productos.dto';
 
 @Injectable()
 export class ProductosService {
@@ -12,7 +13,7 @@ export class ProductosService {
   // =========================
   // CREATE
   // =========================
-  create(data: CreateProductoDto) {
+  async create(data: CreateProductoDto) {
     return this.prisma.productos.create({
       data,
       include: {
@@ -24,9 +25,38 @@ export class ProductosService {
   }
 
   // =========================
+  // BATCH CREATE (TRANSACCIONAL)
+  // =========================
+  async batchCreate(dto: BatchCreateProductosDto) {
+    const { productos } = dto;
+
+    if (!productos.length) {
+      throw new Error('No se enviaron productos para crear');
+    }
+
+    const created = await this.prisma.$transaction(
+      productos.map((data) =>
+        this.prisma.productos.create({
+          data,
+          include: {
+            fabricantes: true,
+            categorias: true,
+            marcas: true,
+          },
+        }),
+      ),
+    );
+
+    return {
+      count: created.length,
+      data: created,
+    };
+  }
+
+  // =========================
   // FIND ALL
   // =========================
-  findAll() {
+  async findAll() {
     return this.prisma.productos.findMany({
       include: {
         fabricantes: true,
