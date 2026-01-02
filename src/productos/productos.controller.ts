@@ -15,6 +15,8 @@ import { UpdateProductoDto } from './dto/update-producto.dto';
 import { BuscarProductosDto } from './dto/buscar-productos.dto';
 import { BatchDeleteProductosDto } from './dto/batch-delete-productos.dto';
 import { BatchCreateProductosDto } from './dto/batch-create-productos.dto';
+import { ApiBody, ApiOperation } from '@nestjs/swagger';
+import { BatchUpdatePreciosBySkuDto } from './dto/batch-update-precios.dto';
 // import { BatchUpdateProductosDto } from './dto/batch-update-productos.dto';
 
 @Controller('productos')
@@ -29,6 +31,13 @@ export class ProductosController {
   @Post('batch')
   batchCreate(@Body() dto: BatchCreateProductosDto) {
     return this.productosService.batchCreate(dto);
+  }
+
+  @Patch('precios/by-sku')
+  @ApiOperation({ summary: 'Actualizar precios masivamente por SKU' })
+  @ApiBody({ type: BatchUpdatePreciosBySkuDto })
+  batchUpdatePreciosBySku(@Body() dto: BatchUpdatePreciosBySkuDto) {
+    return this.productosService.batchUpdatePreciosBySku(dto);
   }
 
   @Get()

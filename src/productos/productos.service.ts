@@ -1,4 +1,8 @@
-import { Injectable, NotFoundException } from '@nestjs/common';
+import {
+  BadRequestException,
+  Injectable,
+  NotFoundException,
+} from '@nestjs/common';
 import { PrismaService } from '../prisma/prisma.service';
 import { CreateProductoDto } from './dto/create-producto.dto';
 import { UpdateProductoDto } from './dto/update-producto.dto';
@@ -22,6 +26,78 @@ export class ProductosService {
         marcas: true,
       },
     });
+  }
+
+  /**
+   * Batch update de precios por SKU
+   * - Actualiza en transacción
+   * - Devuelve resumen + lista de SKUs no encontrados
+   */
+  async batchUpdatePreciosBySku(dto: {
+    items: { sku: string; precio: number }[];
+  }) {
+    const { items } = dto;
+
+    if (!items?.length) {
+      throw new BadRequestException('No se enviaron items para actualizar');
+    }
+
+    // Normalización y deduplicación por SKU (si viene repetido, gana el último)
+    const map = new Map<string, number>();
+    for (const it of items) {
+      const sku = (it.sku ?? '').trim();
+      if (!sku) continue;
+      map.set(sku, it.precio);
+    }
+
+    const skus = Array.from(map.keys());
+    if (!skus.length) {
+      throw new BadRequestException('No se enviaron SKUs válidos');
+    }
+
+    // Buscar qué SKUs existen (sin traer todo)
+    const existentes = await this.prisma.productos.findMany({
+      where: { sku: { in: skus } },
+      select: { sku: true },
+    });
+
+    const existentesSet = new Set(existentes.map((e) => e.sku));
+    const notFoundSkus = skus.filter((s) => !existentesSet.has(s));
+
+    // Si querés forzar “todo o nada”, descomentá:
+    // if (notFoundSkus.length) {
+    //   throw new NotFoundException(`SKUs no encontrados: ${notFoundSkus.join(', ')}`);
+    // }
+
+    // Actualizar solo los existentes
+    const toUpdate = skus
+      .filter((s) => existentesSet.has(s))
+      .map((sku) =>
+        this.prisma.productos.updateMany({
+          where: { sku },
+          data: { precio: map.get(sku)! },
+        }),
+      );
+
+    // Si no hay nada para actualizar (todos faltan)
+    if (!toUpdate.length) {
+      return {
+        requested: skus.length,
+        updated: 0,
+        notFoundSkus,
+      };
+    }
+
+    const results = await this.prisma.$transaction(toUpdate);
+
+    // updateMany devuelve { count }, sumamos
+    const updated = results.reduce((acc, r) => acc + r.count, 0);
+
+    return {
+      requested: skus.length,
+      updated,
+      notFoundSkus,
+    };
   }
 
   // =========================
