@@ -14,17 +14,26 @@ import { BatchCreateProductosDto } from './dto/batch-create-productos.dto';
 export class ProductosService {
   constructor(private prisma: PrismaService) {}
 
+  private normalizeEquivalencias(values?: string[]) {
+    if (!values) return undefined; // importante: no tocar si no viene en el patch
+
+    const cleaned = values
+      .map((v) => (v ?? '').trim().toUpperCase())
+      .filter(Boolean);
+
+    return Array.from(new Set(cleaned));
+  }
+
   // =========================
   // CREATE
   // =========================
   async create(data: CreateProductoDto) {
     return this.prisma.productos.create({
-      data,
-      include: {
-        fabricantes: true,
-        categorias: true,
-        marcas: true,
+      data: {
+        ...data,
+        equivalencias: this.normalizeEquivalencias(data.equivalencias) ?? [],
       },
+      include: { fabricantes: true, categorias: true, marcas: true },
     });
   }
 
@@ -206,6 +215,7 @@ export class ProductosService {
         OR: [
           { nombre: { contains: term, mode: 'insensitive' } },
           { sku: { contains: term, mode: 'insensitive' } },
+          { equivalencias: { has: term.toUpperCase() } },
         ],
       }));
     }
@@ -270,14 +280,16 @@ export class ProductosService {
   async update(id: number, data: UpdateProductoDto) {
     await this.findOne(id);
 
+    const nextData: Record<string, any> = { ...data };
+
+    if ('equivalencias' in data) {
+      nextData.equivalencias = this.normalizeEquivalencias(data.equivalencias);
+    }
+
     return this.prisma.productos.update({
       where: { id },
-      data,
-      include: {
-        fabricantes: true,
-        categorias: true,
-        marcas: true,
-      },
+      data: nextData,
+      include: { fabricantes: true, categorias: true, marcas: true },
     });
   }
 

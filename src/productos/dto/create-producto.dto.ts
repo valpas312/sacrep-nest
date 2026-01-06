@@ -46,4 +46,11 @@ export class CreateProductoDto {
   @ApiProperty({ example: 1 })
   @IsInt()
   fabricante: number;
+
+  @ApiProperty({
+    example: ['LUK6001', 'LUK 6001', '  luk-6001  '],
+    required: false,
+  })
+  @IsOptional()
+  equivalencias: string[] | undefined;
 }

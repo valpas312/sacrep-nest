@@ -48,6 +48,7 @@ model productos {
   marca              Int?
   categoria          Int?
   fabricante         Int?
+  equivalencias String[] @default([])
   producto_vehiculos producto_vehiculos[]
   precio        Float      @default(0)
   categorias         categorias?          @relation(fields: [categoria], references: [id], onUpdate: NoAction)
