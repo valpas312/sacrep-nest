@@ -17,6 +17,7 @@ import { BatchDeleteProductosDto } from './dto/batch-delete-productos.dto';
 import { BatchCreateProductosDto } from './dto/batch-create-productos.dto';
 import { ApiBody, ApiOperation } from '@nestjs/swagger';
 import { BatchUpdatePreciosBySkuDto } from './dto/batch-update-precios.dto';
+import { BatchUpdateStockDto } from './dto/batch-update-stock.dto';
 // import { BatchUpdateProductosDto } from './dto/batch-update-productos.dto';
 
 @Controller('productos')
@@ -31,6 +32,11 @@ export class ProductosController {
   @Post('batch')
   batchCreate(@Body() dto: BatchCreateProductosDto) {
     return this.productosService.batchCreate(dto);
+  }
+
+  @Patch('stock/by-id')
+  batchUpdateStock(@Body() dto: BatchUpdateStockDto) {
+    return this.productosService.batchUpdateStock(dto);
   }
 
   @Patch('precios/by-sku')

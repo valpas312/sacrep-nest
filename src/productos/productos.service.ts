@@ -9,6 +9,7 @@ import { UpdateProductoDto } from './dto/update-producto.dto';
 import { BuscarProductosDto } from './dto/buscar-productos.dto';
 import { BatchDeleteProductosDto } from './dto/batch-delete-productos.dto';
 import { BatchCreateProductosDto } from './dto/batch-create-productos.dto';
+import { BatchUpdateStockDto } from './dto/batch-update-stock.dto';
 
 @Injectable()
 export class ProductosService {
@@ -35,6 +36,63 @@ export class ProductosService {
       },
       include: { fabricantes: true, categorias: true, marcas: true },
     });
+  }
+
+  // =========================
+  // BATCH UPDATE stock BY SKU
+  // =========================
+  async batchUpdateStock(dto: BatchUpdateStockDto) {
+    const { items } = dto;
+
+    if (!items?.length) {
+      throw new BadRequestException('No se enviaron items para actualizar');
+    }
+
+    // Deduplicar por id (si viene repetido, gana el último)
+    const map = new Map<number, boolean>();
+    for (const it of items) {
+      const id = Number(it.id);
+      if (!Number.isInteger(id) || id <= 0) continue;
+      map.set(id, Boolean(it.hay_stock));
+    }
+
+    const ids = Array.from(map.keys());
+    if (!ids.length) {
+      throw new BadRequestException('No se enviaron IDs válidos');
+    }
+
+    // Buscar existentes para devolver notFound
+    const existentes = await this.prisma.productos.findMany({
+      where: { id: { in: ids } },
+      select: { id: true },
+    });
+
+    const existentesSet = new Set(existentes.map((e) => e.id));
+    const notFoundIds = ids.filter((id) => !existentesSet.has(id));
+
+    // Actualizar solo existentes (transaccional)
+    const toUpdate = ids
+      .filter((id) => existentesSet.has(id))
+      .map((id) =>
+        this.prisma.productos.update({
+          where: { id },
+          data: { hay_stock: map.get(id)! },
+          select: { id: true, hay_stock: true },
+        }),
+      );
+
+    if (!toUpdate.length) {
+      return { requested: ids.length, updated: 0, notFoundIds, data: [] };
+    }
+
+    const updatedRows = await this.prisma.$transaction(toUpdate);
+
+    return {
+      requested: ids.length,
+      updated: updatedRows.length,
+      notFoundIds,
+      data: updatedRows,
+    };
   }
 
   /**
