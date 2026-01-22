@@ -280,7 +280,7 @@ export class ProductosService {
   }
 
   // =========================
-  // BUSCAR (MEJORADO + EQUIVALENCIAS POR CÓDIGO)
+  // BUSCAR (texto + código parcial + equivalencias)
   // =========================
   async buscar(params: BuscarProductosDto) {
     const {
@@ -301,22 +301,57 @@ export class ProductosService {
     if (q) {
       const terms = q.trim().split(/\s+/).filter(Boolean);
 
-      // Caso "código": 1 solo token -> expandir equivalencias y buscar por sku IN (...)
+      // 1 token => tratar como "código" (soporta parciales tipo DF1145)
       if (terms.length === 1) {
-        codigoBuscado = (terms[0] ?? '').trim().toUpperCase();
-        equivalencias = await this.equivalenciasPorCodigo(codigoBuscado);
+        const termRaw = terms[0];
+        const termUp = (termRaw ?? '').trim().toUpperCase();
+        codigoBuscado = termUp || null;
 
-        const codigosBusqueda = Array.from(
-          new Set([codigoBuscado, ...equivalencias]),
-        );
+        // (A) equivalencias por match EXACTO
+        equivalencias = await this.equivalenciasPorCodigo(termUp);
 
+        // (B) si el término es lo suficientemente largo, intentar también expandir por "contains"
+        //     Ej: DF1145 matchea 3DF1145 en equivalencia_codigos => tomo ese grupo y traigo sus códigos
+        if (termUp.length >= 4) {
+          const matches = await this.prisma.equivalencia_codigos.findMany({
+            where: { codigo: { contains: termUp, mode: 'insensitive' } },
+            select: { grupo_id: true },
+            take: 5, // evita explosión si hay muchos matches
+          });
+
+          const grupoIds = Array.from(new Set(matches.map((m) => m.grupo_id)));
+          if (grupoIds.length) {
+            const cods = await this.prisma.equivalencia_codigos.findMany({
+              where: { grupo_id: { in: grupoIds } },
+              select: { codigo: true },
+            });
+
+            const extra = cods.map((c) => c.codigo);
+            equivalencias = Array.from(
+              new Set([...equivalencias, ...extra]),
+            ).filter((c) => c !== termUp);
+          }
+        }
+
+        const codigosExactos = Array.from(
+          new Set([termUp, ...equivalencias]),
+        ).filter(Boolean);
+
+        // Query:
+        // - sku contains term (para DF1145 -> 3DF1145)
+        // - o sku in (códigos exactos del grupo) si aplica
         where.AND = [
           {
-            sku: { in: codigosBusqueda },
+            OR: [
+              { sku: { contains: termRaw, mode: 'insensitive' } },
+              ...(codigosExactos.length
+                ? [{ sku: { in: codigosExactos } }]
+                : []),
+            ],
           },
         ];
       } else {
-        // Caso texto: búsqueda normal
+        // Texto libre: búsqueda por palabras
         where.AND = terms.map((term) => ({
           OR: [
             { nombre: { contains: term, mode: 'insensitive' } },
@@ -326,10 +361,14 @@ export class ProductosService {
       }
     }
 
+    // Filtros
     if (marca) where.marca = marca;
     if (categoria) where.categoria = categoria;
     if (fabricante) where.fabricante = fabricante;
-    if (stock !== undefined) where.hay_stock = stock;
+
+    if (stock !== undefined) {
+      where.hay_stock = stock;
+    }
 
     if (vehiculo) {
       where.producto_vehiculos = {
@@ -337,6 +376,7 @@ export class ProductosService {
       };
     }
 
+    // Paginación
     const skip = (page - 1) * limit;
 
     const productos = await this.prisma.productos.findMany({
@@ -359,7 +399,7 @@ export class ProductosService {
       total,
       q,
       codigoBuscado,
-      equivalencias, // <- AQUI vienen los códigos equivalentes en la misma respuesta
+      equivalencias, // <- códigos equivalentes (strings) en la misma respuesta
       data: productos,
     };
   }
