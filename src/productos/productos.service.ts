@@ -15,14 +15,36 @@ import { BatchUpdateStockDto } from './dto/batch-update-stock.dto';
 export class ProductosService {
   constructor(private prisma: PrismaService) {}
 
-  private normalizeEquivalencias(values?: string[]) {
-    if (!values) return undefined; // importante: no tocar si no viene en el patch
+  // =========================
+  // HELPERS
+  // =========================
+  private normalizeCodigo(v?: string) {
+    const s = (v ?? '').trim().toUpperCase();
+    return s || null;
+  }
 
-    const cleaned = values
-      .map((v) => (v ?? '').trim().toUpperCase())
-      .filter(Boolean);
+  /**
+   * Devuelve códigos equivalentes (strings) para un código dado.
+   * - Si el código no pertenece a ningún grupo, devuelve []
+   * - Excluye el propio código consultado
+   */
+  async equivalenciasPorCodigo(codigoRaw?: string): Promise<string[]> {
+    const codigo = this.normalizeCodigo(codigoRaw) ?? '';
+    if (!codigo) return [];
 
-    return Array.from(new Set(cleaned));
+    const row = await this.prisma.equivalencia_codigos.findUnique({
+      where: { codigo },
+      select: { grupo_id: true },
+    });
+
+    if (!row) return [];
+
+    const codigos = await this.prisma.equivalencia_codigos.findMany({
+      where: { grupo_id: row.grupo_id },
+      select: { codigo: true },
+    });
+
+    return codigos.map((c) => c.codigo).filter((c) => c !== codigo);
   }
 
   // =========================
@@ -32,14 +54,14 @@ export class ProductosService {
     return this.prisma.productos.create({
       data: {
         ...data,
-        equivalencias: this.normalizeEquivalencias(data.equivalencias) ?? [],
+        sku: this.normalizeCodigo(data.sku),
       },
       include: { fabricantes: true, categorias: true, marcas: true },
     });
   }
 
   // =========================
-  // BATCH UPDATE stock BY SKU
+  // BATCH UPDATE stock BY ID
   // =========================
   async batchUpdateStock(dto: BatchUpdateStockDto) {
     const { items } = dto;
@@ -48,7 +70,6 @@ export class ProductosService {
       throw new BadRequestException('No se enviaron items para actualizar');
     }
 
-    // Deduplicar por id (si viene repetido, gana el último)
     const map = new Map<number, boolean>();
     for (const it of items) {
       const id = Number(it.id);
@@ -61,7 +82,6 @@ export class ProductosService {
       throw new BadRequestException('No se enviaron IDs válidos');
     }
 
-    // Buscar existentes para devolver notFound
     const existentes = await this.prisma.productos.findMany({
       where: { id: { in: ids } },
       select: { id: true },
@@ -70,7 +90,6 @@ export class ProductosService {
     const existentesSet = new Set(existentes.map((e) => e.id));
     const notFoundIds = ids.filter((id) => !existentesSet.has(id));
 
-    // Actualizar solo existentes (transaccional)
     const toUpdate = ids
       .filter((id) => existentesSet.has(id))
       .map((id) =>
@@ -109,10 +128,9 @@ export class ProductosService {
       throw new BadRequestException('No se enviaron items para actualizar');
     }
 
-    // Normalización y deduplicación por SKU (si viene repetido, gana el último)
     const map = new Map<string, number>();
     for (const it of items) {
-      const sku = (it.sku ?? '').trim();
+      const sku = this.normalizeCodigo(it.sku) ?? '';
       if (!sku) continue;
       map.set(sku, it.precio);
     }
@@ -122,7 +140,6 @@ export class ProductosService {
       throw new BadRequestException('No se enviaron SKUs válidos');
     }
 
-    // Buscar qué SKUs existen (sin traer todo)
     const existentes = await this.prisma.productos.findMany({
       where: { sku: { in: skus } },
       select: { sku: true },
@@ -131,12 +148,6 @@ export class ProductosService {
     const existentesSet = new Set(existentes.map((e) => e.sku));
     const notFoundSkus = skus.filter((s) => !existentesSet.has(s));
 
-    // Si querés forzar “todo o nada”, descomentá:
-    // if (notFoundSkus.length) {
-    //   throw new NotFoundException(`SKUs no encontrados: ${notFoundSkus.join(', ')}`);
-    // }
-
-    // Actualizar solo los existentes
     const toUpdate = skus
       .filter((s) => existentesSet.has(s))
       .map((sku) =>
@@ -146,7 +157,6 @@ export class ProductosService {
         }),
       );
 
-    // Si no hay nada para actualizar (todos faltan)
     if (!toUpdate.length) {
       return {
         requested: skus.length,
@@ -156,8 +166,6 @@ export class ProductosService {
     }
 
     const results = await this.prisma.$transaction(toUpdate);
-
-    // updateMany devuelve { count }, sumamos
     const updated = results.reduce((acc, r) => acc + r.count, 0);
 
     return {
@@ -180,7 +188,10 @@ export class ProductosService {
     const created = await this.prisma.$transaction(
       productos.map((data) =>
         this.prisma.productos.create({
-          data,
+          data: {
+            ...data,
+            sku: this.normalizeCodigo(data.sku),
+          },
           include: {
             fabricantes: true,
             categorias: true,
@@ -210,7 +221,7 @@ export class ProductosService {
   }
 
   // =========================
-  // FIND ONE
+  // FIND ONE (con equivalencias por código)
   // =========================
   async findOne(id: number) {
     const producto = await this.prisma.productos.findUnique({
@@ -229,27 +240,30 @@ export class ProductosService {
       throw new NotFoundException('Producto no encontrado');
     }
 
-    return producto;
+    const equivalencias = await this.equivalenciasPorCodigo(
+      producto.sku ?? undefined,
+    );
+
+    return {
+      ...producto,
+      equivalencias, // string[]
+    };
   }
 
   // =========================
   // DESTACADOS (RANDOM)
   // =========================
   async destacados() {
-    // 1) Traigo 8 ids random desde la DB
     const rows = await this.prisma.$queryRaw<Array<{ id: number }>>`
-    SELECT id
-    FROM productos
-    ORDER BY RANDOM()
-    LIMIT 8
-  `;
+      SELECT id
+      FROM productos
+      ORDER BY RANDOM()
+      LIMIT 8
+    `;
 
     const ids = rows.map((r) => r.id);
-
-    // Si no hay productos
     if (!ids.length) return [];
 
-    // 2) Con esos ids, traigo el include completo
     const productos = await this.prisma.productos.findMany({
       where: { id: { in: ids } },
       include: {
@@ -259,7 +273,6 @@ export class ProductosService {
       },
     });
 
-    // 3) IMPORTANTE: findMany no respeta el orden del IN, así que re-ordeno
     const order = new Map(ids.map((id, idx) => [id, idx]));
     productos.sort((a, b) => order.get(a.id)! - order.get(b.id)!);
 
@@ -267,7 +280,7 @@ export class ProductosService {
   }
 
   // =========================
-  // BUSCAR (MEJORADO)
+  // BUSCAR (incluye equivalencias por código si q es un solo token)
   // =========================
   async buscar(params: BuscarProductosDto) {
     const {
@@ -283,8 +296,6 @@ export class ProductosService {
 
     const where: Record<string, any> = {};
 
-    // 🔍 TEXTO LIBRE CON PALABRAS PARCIALES
-    // Ej: "past cronos" -> ["past", "cronos"]
     if (q) {
       const terms = q.trim().split(/\s+/).filter(Boolean);
 
@@ -292,41 +303,31 @@ export class ProductosService {
         OR: [
           { nombre: { contains: term, mode: 'insensitive' } },
           { sku: { contains: term, mode: 'insensitive' } },
-          { equivalencias: { has: term.toUpperCase() } },
         ],
       }));
+
+      // Si es un solo término, lo tratamos como "código" y expandimos equivalencias exactas
+      if (terms.length === 1) {
+        const codigo = this.normalizeCodigo(terms[0]) ?? '';
+        if (codigo) {
+          const eqs = await this.equivalenciasPorCodigo(codigo);
+          const codigosBusqueda = Array.from(new Set([codigo, ...eqs]));
+          (where.AND as any[]).push({ sku: { in: codigosBusqueda } });
+        }
+      }
     }
 
-    // 🔧 Marca
-    if (marca) {
-      where.marca = marca;
-    }
+    if (marca) where.marca = marca;
+    if (categoria) where.categoria = categoria;
+    if (fabricante) where.fabricante = fabricante;
+    if (stock !== undefined) where.hay_stock = stock;
 
-    // 🔧 Categoría
-    if (categoria) {
-      where.categoria = categoria;
-    }
-
-    // 🔧 Fabricante
-    if (fabricante) {
-      where.fabricante = fabricante;
-    }
-
-    // 📦 Stock
-    if (stock !== undefined) {
-      where.hay_stock = stock;
-    }
-
-    // 🚗 Vehículo compatible (many-to-many)
     if (vehiculo) {
       where.producto_vehiculos = {
-        some: {
-          vehiculo_id: vehiculo,
-        },
+        some: { vehiculo_id: vehiculo },
       };
     }
 
-    // 📄 Paginación
     const skip = (page - 1) * limit;
 
     const productos = await this.prisma.productos.findMany({
@@ -359,8 +360,8 @@ export class ProductosService {
 
     const nextData: Record<string, any> = { ...data };
 
-    if ('equivalencias' in data) {
-      nextData.equivalencias = this.normalizeEquivalencias(data.equivalencias);
+    if ('sku' in data) {
+      nextData.sku = this.normalizeCodigo(data.sku);
     }
 
     return this.prisma.productos.update({

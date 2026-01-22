@@ -9,6 +9,7 @@ import { CategoriasModule } from './categorias/categorias.module';
 import { FabricantesModule } from './fabricantes/fabricantes.module';
 import { VehiculosModule } from './vehiculos/vehiculos.module';
 import { ProductoVehiculosModule } from './producto-vehiculos/producto-vehiculos.module';
+import { EquivalenciasModule } from './equivalencias/equivalencias.module';
 
 @Module({
   imports: [
@@ -20,6 +21,7 @@ import { ProductoVehiculosModule } from './producto-vehiculos/producto-vehiculos
     FabricantesModule,
     VehiculosModule,
     ProductoVehiculosModule,
+    EquivalenciasModule,
   ],
   controllers: [AppController],
   providers: [AppService],

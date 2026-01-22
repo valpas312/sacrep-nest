@@ -18,7 +18,6 @@ import { BatchCreateProductosDto } from './dto/batch-create-productos.dto';
 import { ApiBody, ApiOperation } from '@nestjs/swagger';
 import { BatchUpdatePreciosBySkuDto } from './dto/batch-update-precios.dto';
 import { BatchUpdateStockDto } from './dto/batch-update-stock.dto';
-// import { BatchUpdateProductosDto } from './dto/batch-update-productos.dto';
 
 @Controller('productos')
 export class ProductosController {
@@ -56,6 +55,13 @@ export class ProductosController {
     return this.productosService.destacados();
   }
 
+  // Devuelve equivalencias como códigos (strings)
+  // GET /productos/equivalencias?codigo=LUK-6001
+  @Get('equivalencias')
+  equivalencias(@Query('codigo') codigo: string) {
+    return this.productosService.equivalenciasPorCodigo(codigo);
+  }
+
   @Get('buscar')
   buscar(@Query() query: BuscarProductosDto) {
     return this.productosService.buscar(query);
@@ -63,7 +69,7 @@ export class ProductosController {
 
   @Get(':id')
   findOne(@Param('id', ParseIntPipe) id: number) {
-    return this.productosService.findOne(+id);
+    return this.productosService.findOne(id);
   }
 
   @Delete('batch')
@@ -71,21 +77,16 @@ export class ProductosController {
     return this.productosService.batchDelete(dto);
   }
 
-  // @Patch('batch')
-  // batchUpdate(@Body() dto: BatchUpdateProductosDto) {
-  //   return this.productosService.batchUpdate(dto);
-  // }
-
   @Patch(':id')
   update(
-    @Param('id') id: string,
+    @Param('id', ParseIntPipe) id: number,
     @Body() updateProductoDto: UpdateProductoDto,
   ) {
-    return this.productosService.update(+id, updateProductoDto);
+    return this.productosService.update(id, updateProductoDto);
   }
 
   @Delete(':id')
-  remove(@Param('id') id: string) {
-    return this.productosService.remove(+id);
+  remove(@Param('id', ParseIntPipe) id: number) {
+    return this.productosService.remove(id);
   }
 }

@@ -48,7 +48,6 @@ model productos {
   marca              Int?
   categoria          Int?
   fabricante         Int?
-  equivalencias String[] @default([])
   producto_vehiculos producto_vehiculos[]
   precio        Float      @default(0)
   categorias         categorias?          @relation(fields: [categoria], references: [id], onUpdate: NoAction)
@@ -70,4 +69,20 @@ model vehiculos {
   fabricantes        fabricantes?         @relation(fields: [fabricante_id], references: [id], onUpdate: NoAction)
 
   @@index([fabricante_id], map: "idx_vehiculos_fabricante")
+}
+
+model equivalencia_grupos {
+  id      Int @id @default(autoincrement())
+  codigos equivalencia_codigos[]
+}
+
+model equivalencia_codigos {
+  id       Int @id @default(autoincrement())
+  codigo   String
+  grupo_id Int
+
+  grupo equivalencia_grupos @relation(fields: [grupo_id], references: [id], onDelete: Cascade)
+
+  @@unique([codigo])
+  @@index([grupo_id])
 }
