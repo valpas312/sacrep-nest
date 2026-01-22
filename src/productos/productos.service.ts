@@ -233,18 +233,37 @@ export class ProductosService {
   }
 
   // =========================
-  // DESTACADOS
+  // DESTACADOS (RANDOM)
   // =========================
   async destacados() {
-    return this.prisma.productos.findMany({
-      take: 8,
-      orderBy: { id: 'desc' },
+    // 1) Traigo 8 ids random desde la DB
+    const rows = await this.prisma.$queryRaw<Array<{ id: number }>>`
+    SELECT id
+    FROM productos
+    ORDER BY RANDOM()
+    LIMIT 8
+  `;
+
+    const ids = rows.map((r) => r.id);
+
+    // Si no hay productos
+    if (!ids.length) return [];
+
+    // 2) Con esos ids, traigo el include completo
+    const productos = await this.prisma.productos.findMany({
+      where: { id: { in: ids } },
       include: {
         marcas: true,
         categorias: true,
         fabricantes: true,
       },
     });
+
+    // 3) IMPORTANTE: findMany no respeta el orden del IN, así que re-ordeno
+    const order = new Map(ids.map((id, idx) => [id, idx]));
+    productos.sort((a, b) => order.get(a.id)! - order.get(b.id)!);
+
+    return productos;
   }
 
   // =========================
