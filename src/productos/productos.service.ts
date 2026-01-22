@@ -280,7 +280,7 @@ export class ProductosService {
   }
 
   // =========================
-  // BUSCAR (incluye equivalencias por código si q es un solo token)
+  // BUSCAR (MEJORADO + EQUIVALENCIAS POR CÓDIGO)
   // =========================
   async buscar(params: BuscarProductosDto) {
     const {
@@ -295,25 +295,34 @@ export class ProductosService {
     } = params;
 
     const where: Record<string, any> = {};
+    let equivalencias: string[] = [];
+    let codigoBuscado: string | null = null;
 
     if (q) {
       const terms = q.trim().split(/\s+/).filter(Boolean);
 
-      where.AND = terms.map((term) => ({
-        OR: [
-          { nombre: { contains: term, mode: 'insensitive' } },
-          { sku: { contains: term, mode: 'insensitive' } },
-        ],
-      }));
-
-      // Si es un solo término, lo tratamos como "código" y expandimos equivalencias exactas
+      // Caso "código": 1 solo token -> expandir equivalencias y buscar por sku IN (...)
       if (terms.length === 1) {
-        const codigo = this.normalizeCodigo(terms[0]) ?? '';
-        if (codigo) {
-          const eqs = await this.equivalenciasPorCodigo(codigo);
-          const codigosBusqueda = Array.from(new Set([codigo, ...eqs]));
-          (where.AND as any[]).push({ sku: { in: codigosBusqueda } });
-        }
+        codigoBuscado = (terms[0] ?? '').trim().toUpperCase();
+        equivalencias = await this.equivalenciasPorCodigo(codigoBuscado);
+
+        const codigosBusqueda = Array.from(
+          new Set([codigoBuscado, ...equivalencias]),
+        );
+
+        where.AND = [
+          {
+            sku: { in: codigosBusqueda },
+          },
+        ];
+      } else {
+        // Caso texto: búsqueda normal
+        where.AND = terms.map((term) => ({
+          OR: [
+            { nombre: { contains: term, mode: 'insensitive' } },
+            { sku: { contains: term, mode: 'insensitive' } },
+          ],
+        }));
       }
     }
 
@@ -348,6 +357,9 @@ export class ProductosService {
       page,
       limit,
       total,
+      q,
+      codigoBuscado,
+      equivalencias, // <- AQUI vienen los códigos equivalentes en la misma respuesta
       data: productos,
     };
   }
