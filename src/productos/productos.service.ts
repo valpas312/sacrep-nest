@@ -26,6 +26,11 @@ export class ProductosService {
   private pareceCodigo(term: string) {
     return /[0-9]/.test(term);
   }
+
+  private normalizeSkuLoose(value: string) {
+    return value.replace(/[^a-zA-Z0-9]/g, '').toUpperCase();
+  }
+
   /**
    * Devuelve códigos equivalentes (strings) para un código dado.
    * - Si el código no pertenece a ningún grupo, devuelve []
@@ -308,8 +313,9 @@ export class ProductosService {
       if (terms.length === 1 && this.pareceCodigo(terms[0])) {
         const termRaw = terms[0];
         const termUp = termRaw.toUpperCase();
-        codigoBuscado = termUp;
+        const termLoose = this.normalizeSkuLoose(termRaw);
 
+        codigoBuscado = termUp;
         equivalencias = await this.equivalenciasPorCodigo(termUp);
 
         if (termUp.length >= 4) {
@@ -335,6 +341,12 @@ export class ProductosService {
 
         where.OR = [
           { sku: { contains: termRaw, mode: 'insensitive' } },
+          {
+            sku: {
+              contains: termLoose.slice(0, 6),
+              mode: 'insensitive',
+            },
+          },
           ...(equivalencias.length ? [{ sku: { in: equivalencias } }] : []),
           { nombre: { contains: termRaw, mode: 'insensitive' } },
         ];
@@ -376,15 +388,25 @@ export class ProductosService {
     const total = await this.prisma.productos.count({ where });
 
     if (!productos.length && q) {
+      const qLoose = this.normalizeSkuLoose(q);
+
       const similares = await this.prisma.productos.findMany({
         where: {
-          nombre: { contains: q.slice(0, 4), mode: 'insensitive' },
+          OR: [
+            { nombre: { contains: q, mode: 'insensitive' } },
+            {
+              sku: {
+                contains: qLoose.slice(0, 6),
+                mode: 'insensitive',
+              },
+            },
+          ],
         },
-        select: { nombre: true },
+        select: { nombre: true, sku: true },
         take: 5,
       });
 
-      sugerencias = similares.map((p) => p.nombre);
+      sugerencias = similares.map((p) => `${p.nombre} (${p.sku})`);
     }
 
     return {
