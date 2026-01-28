@@ -307,11 +307,15 @@ export class ProductosService {
     let codigoBuscado: string | null = null;
     let sugerencias: string[] = [];
 
-    let forceIds: number[] | null = null;
-
+    // =========================
+    // BÚSQUEDA
+    // =========================
     if (q) {
       const terms = q.trim().split(/\s+/).filter(Boolean);
 
+      // =========================
+      // BÚSQUEDA POR CÓDIGO
+      // =========================
       if (terms.length === 1 && this.pareceCodigo(terms[0])) {
         const termRaw = terms[0];
         const termUp = termRaw.toUpperCase();
@@ -320,13 +324,7 @@ export class ProductosService {
         codigoBuscado = termUp;
         equivalencias = await this.equivalenciasPorCodigo(termUp);
 
-        where.OR = [
-          { sku: { contains: termRaw, mode: 'insensitive' } },
-          ...(equivalencias.length ? [{ sku: { in: equivalencias } }] : []),
-          { nombre: { contains: termRaw, mode: 'insensitive' } },
-        ];
-
-        // 🔥 FALLBACK SQL: PGK003 => PGK-003
+        // 🔥 PRIORIDAD ABSOLUTA: SKU normalizado (PGK003 => PGK-003)
         const rows = await this.prisma.$queryRaw<Array<{ id: number }>>`
         SELECT id
         FROM productos
@@ -337,9 +335,42 @@ export class ProductosService {
       `;
 
         if (rows.length) {
-          forceIds = rows.map((r) => r.id);
+          const ids = rows.map((r) => r.id);
+
+          const data = await this.prisma.productos.findMany({
+            where: { id: { in: ids } },
+            include: {
+              marcas: true,
+              categorias: true,
+              fabricantes: true,
+              producto_vehiculos: vehiculo
+                ? { include: { vehiculos: true } }
+                : false,
+            },
+          });
+
+          return {
+            page: 1,
+            limit: data.length,
+            total: data.length,
+            q,
+            codigoBuscado,
+            equivalencias,
+            sugerencias: [],
+            data,
+          };
         }
+
+        // fallback normal si no hubo match normalizado
+        where.OR = [
+          { sku: { contains: termRaw, mode: 'insensitive' } },
+          ...(equivalencias.length ? [{ sku: { in: equivalencias } }] : []),
+          { nombre: { contains: termRaw, mode: 'insensitive' } },
+        ];
       } else {
+        // =========================
+        // BÚSQUEDA DE TEXTO
+        // =========================
         where.AND = terms.map((term) => ({
           OR: [
             { nombre: { contains: term, mode: 'insensitive' } },
@@ -349,6 +380,9 @@ export class ProductosService {
       }
     }
 
+    // =========================
+    // FILTROS
+    // =========================
     if (marca) where.marca = marca;
     if (categoria) where.categoria = categoria;
     if (fabricante) where.fabricante = fabricante;
@@ -360,10 +394,9 @@ export class ProductosService {
       };
     }
 
-    if (forceIds) {
-      where.id = { in: forceIds };
-    }
-
+    // =========================
+    // QUERY FINAL
+    // =========================
     const skip = (page - 1) * limit;
 
     const productos = await this.prisma.productos.findMany({
@@ -380,6 +413,9 @@ export class ProductosService {
 
     const total = await this.prisma.productos.count({ where });
 
+    // =========================
+    // SUGERENCIAS
+    // =========================
     if (!productos.length && q) {
       const qLoose = this.normalizeSkuLoose(q);
 
