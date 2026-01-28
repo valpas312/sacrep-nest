@@ -23,6 +23,9 @@ export class ProductosService {
     return s || null;
   }
 
+  private pareceCodigo(term: string) {
+    return /[0-9]/.test(term);
+  }
   /**
    * Devuelve códigos equivalentes (strings) para un código dado.
    * - Si el código no pertenece a ningún grupo, devuelve []
@@ -297,61 +300,45 @@ export class ProductosService {
     const where: Record<string, any> = {};
     let equivalencias: string[] = [];
     let codigoBuscado: string | null = null;
+    let sugerencias: string[] = [];
 
     if (q) {
       const terms = q.trim().split(/\s+/).filter(Boolean);
 
-      // 1 token => tratar como "código" (soporta parciales tipo DF1145)
-      if (terms.length === 1) {
+      if (terms.length === 1 && this.pareceCodigo(terms[0])) {
         const termRaw = terms[0];
-        const termUp = (termRaw ?? '').trim().toUpperCase();
-        codigoBuscado = termUp || null;
+        const termUp = termRaw.toUpperCase();
+        codigoBuscado = termUp;
 
-        // (A) equivalencias por match EXACTO
         equivalencias = await this.equivalenciasPorCodigo(termUp);
 
-        // (B) si el término es lo suficientemente largo, intentar también expandir por "contains"
-        //     Ej: DF1145 matchea 3DF1145 en equivalencia_codigos => tomo ese grupo y traigo sus códigos
         if (termUp.length >= 4) {
           const matches = await this.prisma.equivalencia_codigos.findMany({
             where: { codigo: { contains: termUp, mode: 'insensitive' } },
             select: { grupo_id: true },
-            take: 5, // evita explosión si hay muchos matches
+            take: 5,
           });
 
-          const grupoIds = Array.from(new Set(matches.map((m) => m.grupo_id)));
+          const grupoIds = [...new Set(matches.map((m) => m.grupo_id))];
+
           if (grupoIds.length) {
             const cods = await this.prisma.equivalencia_codigos.findMany({
               where: { grupo_id: { in: grupoIds } },
               select: { codigo: true },
             });
 
-            const extra = cods.map((c) => c.codigo);
-            equivalencias = Array.from(
-              new Set([...equivalencias, ...extra]),
-            ).filter((c) => c !== termUp);
+            equivalencias = [
+              ...new Set([...equivalencias, ...cods.map((c) => c.codigo)]),
+            ].filter((c) => c !== termUp);
           }
         }
 
-        const codigosExactos = Array.from(
-          new Set([termUp, ...equivalencias]),
-        ).filter(Boolean);
-
-        // Query:
-        // - sku contains term (para DF1145 -> 3DF1145)
-        // - o sku in (códigos exactos del grupo) si aplica
-        where.AND = [
-          {
-            OR: [
-              { sku: { contains: termRaw, mode: 'insensitive' } },
-              ...(codigosExactos.length
-                ? [{ sku: { in: codigosExactos } }]
-                : []),
-            ],
-          },
+        where.OR = [
+          { sku: { contains: termRaw, mode: 'insensitive' } },
+          ...(equivalencias.length ? [{ sku: { in: equivalencias } }] : []),
+          { nombre: { contains: termRaw, mode: 'insensitive' } },
         ];
       } else {
-        // Texto libre: búsqueda por palabras
         where.AND = terms.map((term) => ({
           OR: [
             { nombre: { contains: term, mode: 'insensitive' } },
@@ -361,14 +348,10 @@ export class ProductosService {
       }
     }
 
-    // Filtros
     if (marca) where.marca = marca;
     if (categoria) where.categoria = categoria;
     if (fabricante) where.fabricante = fabricante;
-
-    if (stock !== undefined) {
-      where.hay_stock = stock;
-    }
+    if (stock !== undefined) where.hay_stock = stock;
 
     if (vehiculo) {
       where.producto_vehiculos = {
@@ -376,7 +359,6 @@ export class ProductosService {
       };
     }
 
-    // Paginación
     const skip = (page - 1) * limit;
 
     const productos = await this.prisma.productos.findMany({
@@ -393,13 +375,26 @@ export class ProductosService {
 
     const total = await this.prisma.productos.count({ where });
 
+    if (!productos.length && q) {
+      const similares = await this.prisma.productos.findMany({
+        where: {
+          nombre: { contains: q.slice(0, 4), mode: 'insensitive' },
+        },
+        select: { nombre: true },
+        take: 5,
+      });
+
+      sugerencias = similares.map((p) => p.nombre);
+    }
+
     return {
       page,
       limit,
       total,
       q,
       codigoBuscado,
-      equivalencias, // <- códigos equivalentes (strings) en la misma respuesta
+      equivalencias,
+      sugerencias,
       data: productos,
     };
   }
