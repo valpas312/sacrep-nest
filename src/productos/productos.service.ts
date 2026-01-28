@@ -307,6 +307,8 @@ export class ProductosService {
     let codigoBuscado: string | null = null;
     let sugerencias: string[] = [];
 
+    let forceIds: number[] | null = null;
+
     if (q) {
       const terms = q.trim().split(/\s+/).filter(Boolean);
 
@@ -318,38 +320,25 @@ export class ProductosService {
         codigoBuscado = termUp;
         equivalencias = await this.equivalenciasPorCodigo(termUp);
 
-        if (termUp.length >= 4) {
-          const matches = await this.prisma.equivalencia_codigos.findMany({
-            where: { codigo: { contains: termUp, mode: 'insensitive' } },
-            select: { grupo_id: true },
-            take: 5,
-          });
-
-          const grupoIds = [...new Set(matches.map((m) => m.grupo_id))];
-
-          if (grupoIds.length) {
-            const cods = await this.prisma.equivalencia_codigos.findMany({
-              where: { grupo_id: { in: grupoIds } },
-              select: { codigo: true },
-            });
-
-            equivalencias = [
-              ...new Set([...equivalencias, ...cods.map((c) => c.codigo)]),
-            ].filter((c) => c !== termUp);
-          }
-        }
-
         where.OR = [
           { sku: { contains: termRaw, mode: 'insensitive' } },
-          {
-            sku: {
-              contains: termLoose.slice(0, 6),
-              mode: 'insensitive',
-            },
-          },
           ...(equivalencias.length ? [{ sku: { in: equivalencias } }] : []),
           { nombre: { contains: termRaw, mode: 'insensitive' } },
         ];
+
+        // 🔥 FALLBACK SQL: PGK003 => PGK-003
+        const rows = await this.prisma.$queryRaw<Array<{ id: number }>>`
+        SELECT id
+        FROM productos
+        WHERE UPPER(
+          REGEXP_REPLACE(sku, '[^A-Z0-9]', '', 'g')
+        ) LIKE ${'%' + termLoose + '%'}
+        LIMIT 50
+      `;
+
+        if (rows.length) {
+          forceIds = rows.map((r) => r.id);
+        }
       } else {
         where.AND = terms.map((term) => ({
           OR: [
@@ -371,6 +360,10 @@ export class ProductosService {
       };
     }
 
+    if (forceIds) {
+      where.id = { in: forceIds };
+    }
+
     const skip = (page - 1) * limit;
 
     const productos = await this.prisma.productos.findMany({
@@ -390,21 +383,16 @@ export class ProductosService {
     if (!productos.length && q) {
       const qLoose = this.normalizeSkuLoose(q);
 
-      const similares = await this.prisma.productos.findMany({
-        where: {
-          OR: [
-            { nombre: { contains: q, mode: 'insensitive' } },
-            {
-              sku: {
-                contains: qLoose.slice(0, 6),
-                mode: 'insensitive',
-              },
-            },
-          ],
-        },
-        select: { nombre: true, sku: true },
-        take: 5,
-      });
+      const similares = await this.prisma.$queryRaw<
+        Array<{ nombre: string; sku: string }>
+      >`
+      SELECT nombre, sku
+      FROM productos
+      WHERE UPPER(
+        REGEXP_REPLACE(sku, '[^A-Z0-9]', '', 'g')
+      ) LIKE ${'%' + qLoose + '%'}
+      LIMIT 5
+    `;
 
       sugerencias = similares.map((p) => `${p.nombre} (${p.sku})`);
     }
