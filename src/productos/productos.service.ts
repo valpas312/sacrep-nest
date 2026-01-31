@@ -1,9 +1,15 @@
-import { Injectable, NotFoundException } from '@nestjs/common';
+import {
+  BadRequestException,
+  Injectable,
+  NotFoundException,
+} from '@nestjs/common';
 import { PrismaService } from '../prisma/prisma.service';
 import { CreateProductoDto } from './dto/create-producto.dto';
 import { UpdateProductoDto } from './dto/update-producto.dto';
 import { BuscarProductosDto } from './dto/buscar-productos.dto';
 import { BatchDeleteProductosDto } from './dto/batch-delete-productos.dto';
+import { BatchCreateProductosDto } from './dto/batch-create-productos.dto';
+import { BatchUpdateStockDto } from './dto/batch-update-stock.dto';
 
 @Injectable()
 export class ProductosService {
@@ -18,7 +24,7 @@ export class ProductosService {
   }
 
   private normalizeSkuLoose(value: string) {
-    return value.replace(/[^a-zA-Z0-9]/g, '').toUpperCase();
+    return value.replace(/[^A-Z0-9]/gi, '').toUpperCase();
   }
 
   private pareceCodigo(term: string) {
@@ -58,6 +64,79 @@ export class ProductosService {
   }
 
   // =========================
+  // BATCH CREATE
+  // =========================
+  async batchCreate(dto: BatchCreateProductosDto) {
+    if (!dto.productos?.length) {
+      throw new BadRequestException('No se enviaron productos');
+    }
+
+    const created = await this.prisma.$transaction(
+      dto.productos.map((p) =>
+        this.prisma.productos.create({
+          data: {
+            ...p,
+            sku: this.normalizeCodigo(p.sku),
+          },
+        }),
+      ),
+    );
+
+    return { count: created.length, data: created };
+  }
+
+  // =========================
+  // BATCH UPDATE STOCK
+  // =========================
+  async batchUpdateStock(dto: BatchUpdateStockDto) {
+    if (!dto.items?.length) {
+      throw new BadRequestException('No se enviaron items');
+    }
+
+    const updates = dto.items.map((i) =>
+      this.prisma.productos.update({
+        where: { id: i.id },
+        data: { hay_stock: i.hay_stock },
+      }),
+    );
+
+    await this.prisma.$transaction(updates);
+    return { updated: updates.length };
+  }
+
+  // =========================
+  // BATCH UPDATE PRECIOS POR SKU
+  // =========================
+  async batchUpdatePreciosBySku(dto: {
+    items: { sku: string; precio: number }[];
+  }) {
+    if (!dto.items?.length) {
+      throw new BadRequestException('No se enviaron items');
+    }
+
+    const updates = dto.items.map((i) =>
+      this.prisma.productos.updateMany({
+        where: { sku: this.normalizeCodigo(i.sku) },
+        data: { precio: i.precio },
+      }),
+    );
+
+    const res = await this.prisma.$transaction(updates);
+    const updated = res.reduce((a, b) => a + b.count, 0);
+
+    return { updated };
+  }
+
+  // =========================
+  // FIND ALL
+  // =========================
+  async findAll() {
+    return this.prisma.productos.findMany({
+      include: { fabricantes: true, categorias: true, marcas: true },
+    });
+  }
+
+  // =========================
   // FIND ONE
   // =========================
   async findOne(id: number) {
@@ -67,9 +146,6 @@ export class ProductosService {
         fabricantes: true,
         categorias: true,
         marcas: true,
-        producto_vehiculos: {
-          include: { vehiculos: true },
-        },
       },
     });
 
@@ -79,139 +155,66 @@ export class ProductosService {
 
     const equivalencias = await this.equivalenciasPorCodigo(producto.sku);
 
-    return {
-      ...producto,
-      equivalencias,
-    };
+    return { ...producto, equivalencias };
   }
 
   // =========================
-  // BUSCAR (FIX DEFINITIVO)
+  // DESTACADOS
+  // =========================
+  async destacados() {
+    return this.prisma.$queryRaw`
+      SELECT *
+      FROM productos
+      ORDER BY RANDOM()
+      LIMIT 8
+    `;
+  }
+
+  // =========================
+  // BUSCAR (SKU LOOSE + EQUIVALENCIAS OK)
   // =========================
   async buscar(params: BuscarProductosDto) {
-    const {
-      q,
-      marca,
-      categoria,
-      fabricante,
-      vehiculo,
-      stock,
-      page = 1,
-      limit = 20,
-    } = params;
+    const { q, page = 1, limit = 20 } = params;
 
-    const where: Record<string, any> = {};
     let equivalencias: string[] = [];
     let codigoBuscado: string | null = null;
-    let sugerencias: string[] = [];
 
-    // =========================
-    // BÚSQUEDA POR CÓDIGO
-    // =========================
-    if (q) {
-      const termRaw = q.trim();
-      const termLoose = this.normalizeSkuLoose(termRaw);
-      codigoBuscado = termRaw.toUpperCase();
+    if (q && this.pareceCodigo(q)) {
+      const qLoose = this.normalizeSkuLoose(q);
+      codigoBuscado = q.toUpperCase();
 
-      if (this.pareceCodigo(termRaw)) {
-        // 🔥 buscar producto por SKU loose
-        const rows = await this.prisma.$queryRaw<Array<{ id: number }>>`
-          SELECT id
-          FROM productos
-          WHERE UPPER(REGEXP_REPLACE(sku, '[^A-Z0-9]', '', 'g'))
-          LIKE ${'%' + termLoose + '%'}
-          LIMIT 20
-        `;
+      const productos = await this.prisma.$queryRaw<{ sku?: string }[]>`
+        SELECT *
+        FROM productos
+        WHERE UPPER(REGEXP_REPLACE(sku, '[^A-Z0-9]', '', 'g'))
+        LIKE ${'%' + qLoose + '%'}
+        LIMIT ${limit}
+      `;
 
-        if (rows.length) {
-          const ids = rows.map((r) => r.id);
-
-          const productos = await this.prisma.productos.findMany({
-            where: { id: { in: ids } },
-            include: {
-              marcas: true,
-              categorias: true,
-              fabricantes: true,
-              producto_vehiculos: vehiculo
-                ? { include: { vehiculos: true } }
-                : false,
-            },
-          });
-
-          // 🔥 equivalencias usando SKU REAL encontrado
-          equivalencias = await this.equivalenciasPorCodigo(productos[0].sku);
-
-          return {
-            page: 1,
-            limit: productos.length,
-            total: productos.length,
-            q,
-            codigoBuscado,
-            equivalencias,
-            sugerencias: [],
-            data: productos,
-          };
-        }
+      if (productos.length && productos[0].sku) {
+        equivalencias = await this.equivalenciasPorCodigo(productos[0].sku);
       }
 
-      // fallback texto
-      where.OR = [
-        { nombre: { contains: termRaw, mode: 'insensitive' } },
-        { sku: { contains: termRaw, mode: 'insensitive' } },
-      ];
-    }
-
-    // =========================
-    // FILTROS
-    // =========================
-    if (marca) where.marca = marca;
-    if (categoria) where.categoria = categoria;
-    if (fabricante) where.fabricante = fabricante;
-    if (stock !== undefined) where.hay_stock = stock;
-
-    if (vehiculo) {
-      where.producto_vehiculos = {
-        some: { vehiculo_id: vehiculo },
+      return {
+        page: 1,
+        limit: productos.length,
+        total: productos.length,
+        q,
+        codigoBuscado,
+        equivalencias,
+        sugerencias: [],
+        data: productos,
       };
     }
 
-    // =========================
-    // QUERY FINAL
-    // =========================
     const skip = (page - 1) * limit;
 
-    const productos = await this.prisma.productos.findMany({
-      where,
-      include: {
-        marcas: true,
-        categorias: true,
-        fabricantes: true,
-        producto_vehiculos: vehiculo ? { include: { vehiculos: true } } : false,
-      },
+    const data = await this.prisma.productos.findMany({
       skip,
       take: limit,
     });
 
-    const total = await this.prisma.productos.count({ where });
-
-    // =========================
-    // SUGERENCIAS
-    // =========================
-    if (!productos.length && q) {
-      const qLoose = this.normalizeSkuLoose(q);
-
-      const similares = await this.prisma.$queryRaw<
-        Array<{ nombre: string; sku: string }>
-      >`
-        SELECT nombre, sku
-        FROM productos
-        WHERE UPPER(REGEXP_REPLACE(sku, '[^A-Z0-9]', '', 'g'))
-        LIKE ${'%' + qLoose + '%'}
-        LIMIT 5
-      `;
-
-      sugerencias = similares.map((p) => `${p.nombre} (${p.sku})`);
-    }
+    const total = await this.prisma.productos.count();
 
     return {
       page,
@@ -220,8 +223,8 @@ export class ProductosService {
       q,
       codigoBuscado,
       equivalencias,
-      sugerencias,
-      data: productos,
+      sugerencias: [],
+      data,
     };
   }
 
@@ -237,7 +240,6 @@ export class ProductosService {
         ...data,
         sku: data.sku ? this.normalizeCodigo(data.sku) : undefined,
       },
-      include: { fabricantes: true, categorias: true, marcas: true },
     });
   }
 
