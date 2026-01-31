@@ -171,50 +171,114 @@ export class ProductosService {
   }
 
   // =========================
-  // BUSCAR (SKU LOOSE + EQUIVALENCIAS OK)
+  // BUSCAR (SKU + EQUIVALENCIAS OBLIGATORIAS)
   // =========================
   async buscar(params: BuscarProductosDto) {
-    const { q, page = 1, limit = 20 } = params;
+    const {
+      q,
+      marca,
+      categoria,
+      fabricante,
+      vehiculo,
+      stock,
+      page = 1,
+      limit = 20,
+    } = params;
 
     let equivalencias: string[] = [];
     let codigoBuscado: string | null = null;
 
+    // =========================
+    // BÚSQUEDA POR CÓDIGO
+    // =========================
     if (q && this.pareceCodigo(q)) {
+      const qUp = q.toUpperCase();
       const qLoose = this.normalizeSkuLoose(q);
-      codigoBuscado = q.toUpperCase();
 
-      const productos = await this.prisma.$queryRaw<{ sku?: string }[]>`
+      codigoBuscado = qUp;
+
+      // 1️⃣ Buscar producto por SKU "loose"
+      const productosBase = await this.prisma.$queryRaw<
+        Array<{ id: number; sku: string }>
+      >`
+      SELECT id, sku
+      FROM productos
+      WHERE UPPER(
+        REGEXP_REPLACE(sku, '[^A-Z0-9]', '', 'g')
+      ) LIKE ${'%' + qLoose + '%'}
+      LIMIT 1
+    `;
+
+      if (productosBase.length) {
+        const skuReal = productosBase[0].sku;
+
+        // 2️⃣ Traer equivalencias reales del grupo
+        equivalencias = await this.equivalenciasPorCodigo(skuReal);
+
+        const codigosBusqueda = [skuReal, ...equivalencias].map((c) =>
+          this.normalizeSkuLoose(c),
+        );
+
+        // 3️⃣ Buscar productos cuyo SKU esté en el grupo
+        const data = await this.prisma.$queryRaw<any[]>`
         SELECT *
         FROM productos
-        WHERE UPPER(REGEXP_REPLACE(sku, '[^A-Z0-9]', '', 'g'))
-        LIKE ${'%' + qLoose + '%'}
-        LIMIT ${limit}
+        WHERE UPPER(
+          REGEXP_REPLACE(sku, '[^A-Z0-9]', '', 'g')
+        ) = ANY (${codigosBusqueda})
       `;
 
-      if (productos.length && productos[0].sku) {
-        equivalencias = await this.equivalenciasPorCodigo(productos[0].sku);
+        return {
+          page: 1,
+          limit: data.length,
+          total: data.length,
+          q,
+          codigoBuscado,
+          equivalencias,
+          sugerencias: [],
+          data,
+        };
       }
+    }
 
-      return {
-        page: 1,
-        limit: productos.length,
-        total: productos.length,
-        q,
-        codigoBuscado,
-        equivalencias,
-        sugerencias: [],
-        data: productos,
+    // =========================
+    // BÚSQUEDA NORMAL (fallback)
+    // =========================
+    const where: Record<string, any> = {};
+
+    if (q) {
+      where.OR = [
+        { nombre: { contains: q, mode: 'insensitive' } },
+        { sku: { contains: q, mode: 'insensitive' } },
+      ];
+    }
+
+    if (marca) where.marca = marca;
+    if (categoria) where.categoria = categoria;
+    if (fabricante) where.fabricante = fabricante;
+    if (stock !== undefined) where.hay_stock = stock;
+
+    if (vehiculo) {
+      where.producto_vehiculos = {
+        some: { vehiculo_id: vehiculo },
       };
     }
 
     const skip = (page - 1) * limit;
 
     const data = await this.prisma.productos.findMany({
+      where,
+      include: {
+        marcas: true,
+        categorias: true,
+        fabricantes: true,
+        producto_vehiculos: vehiculo ? { include: { vehiculos: true } } : false,
+      },
       skip,
       take: limit,
     });
 
-    const total = await this.prisma.productos.count();
+    const total = await this.prisma.productos.count({ where });
 
     return {
       page,
@@ -222,7 +286,7 @@ export class ProductosService {
       total,
       q,
       codigoBuscado,
-      equivalencias,
+      equivalencias: [],
       sugerencias: [],
       data,
     };
