@@ -242,15 +242,19 @@ export class ProductosService {
     }
 
     // =========================
-    // BÚSQUEDA NORMAL (fallback)
+    // BÚSQUEDA NORMAL (texto libre)
     // =========================
     const where: Record<string, any> = {};
 
     if (q) {
-      where.OR = [
-        { nombre: { contains: q, mode: 'insensitive' } },
-        { sku: { contains: q, mode: 'insensitive' } },
-      ];
+      const terms = q.trim().split(/\s+/).filter(Boolean);
+
+      where.AND = terms.map((term) => ({
+        OR: [
+          { nombre: { contains: term, mode: 'insensitive' } },
+          { sku: { contains: term, mode: 'insensitive' } },
+        ],
+      }));
     }
 
     if (marca) where.marca = marca;
