@@ -153,7 +153,7 @@ export class ProductosService {
   }
 
   // =========================
-  // BUSCAR (CORREGIDO FINAL)
+  // BUSCAR (FIX DEFINITIVO)
   // =========================
   async buscar(params: BuscarProductosDto) {
     const { q, stock, page = 1, limit = 20 } = params;
@@ -162,13 +162,13 @@ export class ProductosService {
     let equivalencias: string[] = [];
 
     // =========================
-    // BÚSQUEDA POR CÓDIGO
+    // BÚSQUEDA POR CÓDIGO / EQUIVALENCIA
     // =========================
     if (q && this.pareceCodigo(q)) {
       const qLoose = this.normalizeSkuLoose(q);
       codigoBuscado = qLoose;
 
-      // 1️⃣ resolver grupo de equivalencias (aunque no exista como producto)
+      // 1️⃣ Resolver grupo aunque NO exista como producto
       const grupo = await this.obtenerGrupoEquivalencias(q);
 
       if (grupo.length) {
@@ -178,12 +178,15 @@ export class ProductosService {
           (c) => this.normalizeSkuLoose(c) !== qLoose,
         );
 
-        // 2️⃣ traer productos reales del grupo (loose match)
-        const stockClause =
-          stock !== undefined ? `AND hay_stock = ${stock}` : '';
-        const data = await this.prisma.$queryRaw<any[]>(
-          Prisma.sql`SELECT * FROM productos WHERE UPPER(REGEXP_REPLACE(sku, '[^A-Z0-9]', '', 'g')) = ANY(${Prisma.join(grupoLoose)}) ${Prisma.raw(stockClause)}`,
-        );
+        // 2️⃣ Traer productos reales del grupo
+        const data = await this.prisma.$queryRaw<any[]>`
+        SELECT *
+        FROM productos
+        WHERE UPPER(
+          REGEXP_REPLACE(sku, '[^A-Z0-9]', '', 'g')
+        ) = ANY (${grupoLoose})
+        AND (${stock} IS NULL OR hay_stock = ${stock})
+      `;
 
         return {
           page,
@@ -199,7 +202,7 @@ export class ProductosService {
     }
 
     // =========================
-    // BÚSQUEDA TEXTO (AND real)
+    // BÚSQUEDA TEXTO (AND REAL)
     // =========================
     const terms =
       q
