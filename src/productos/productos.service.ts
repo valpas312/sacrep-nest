@@ -4,6 +4,7 @@ import {
   NotFoundException,
 } from '@nestjs/common';
 import { PrismaService } from '../prisma/prisma.service';
+import { Prisma } from '@prisma/client';
 import { CreateProductoDto } from './dto/create-producto.dto';
 import { UpdateProductoDto } from './dto/update-producto.dto';
 import { BuscarProductosDto } from './dto/buscar-productos.dto';
@@ -225,12 +226,37 @@ export class ProductosService {
     }
 
     // fallback texto
+    // =========================
+    // BÚSQUEDA TEXTO INTELIGENTE
+    // =========================
+    const terms =
+      q
+        ?.trim()
+        .toLowerCase()
+        .split(/\s+/)
+        .filter((t) => t.length > 1) ?? [];
+
+    const where: Prisma.productosWhereInput =
+      terms.length > 0
+        ? {
+            AND: terms.map((term) => ({
+              OR: [
+                {
+                  nombre: {
+                    contains: term,
+                    mode: Prisma.QueryMode.insensitive,
+                  },
+                },
+                { sku: { contains: term, mode: Prisma.QueryMode.insensitive } },
+              ],
+            })),
+          }
+        : {};
+
     const data = await this.prisma.productos.findMany({
       where: {
-        OR: [
-          { nombre: { contains: q, mode: 'insensitive' } },
-          { sku: { contains: q, mode: 'insensitive' } },
-        ],
+        ...where,
+        ...(stock !== undefined ? { hay_stock: stock } : {}),
       },
     });
 
