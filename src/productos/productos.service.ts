@@ -174,8 +174,26 @@ export class ProductosService {
       if (grupo.length) {
         const grupoLoose = grupo.map((c) => this.normalizeSkuLoose(c));
 
+        interface ProductoRow {
+          sku: string;
+        }
+
+        const dataCheck = await this.prisma.$queryRaw<ProductoRow[]>`
+  SELECT *
+  FROM productos
+  WHERE UPPER(
+    REGEXP_REPLACE(sku, '[^A-Z0-9]', '', 'g')
+  ) = ANY (${grupoLoose})
+  AND (${stock} IS NULL OR hay_stock = ${stock})
+`;
+
+        const skuBase =
+          dataCheck.length > 0
+            ? this.normalizeSkuLoose(dataCheck[0].sku)
+            : qLoose;
+
         equivalencias = grupo.filter(
-          (c) => this.normalizeSkuLoose(c) !== qLoose,
+          (c) => this.normalizeSkuLoose(c) !== skuBase,
         );
 
         // 2️⃣ Traer productos reales del grupo
