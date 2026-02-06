@@ -31,23 +31,27 @@ export class ProductosService {
     return /[0-9]/.test(term);
   }
 
-  async equivalenciasPorCodigo(codigoRaw?: string | null): Promise<string[]> {
-    const codigo = this.normalizeCodigo(codigoRaw);
-    if (!codigo) return [];
+  // =========================
+  // EQUIVALENCIAS (BIDIRECCIONAL)
+  // =========================
+  private async equivalenciasIncluyendoCodigo(codigoRaw: string) {
+    const codigo = this.normalizeSkuLoose(codigoRaw);
 
-    const row = await this.prisma.equivalencia_codigos.findUnique({
+    const rows = await this.prisma.equivalencia_codigos.findMany({
       where: { codigo },
       select: { grupo_id: true },
     });
 
-    if (!row) return [];
+    if (!rows.length) return [];
+
+    const grupoIds = rows.map((r) => r.grupo_id);
 
     const codigos = await this.prisma.equivalencia_codigos.findMany({
-      where: { grupo_id: row.grupo_id },
+      where: { grupo_id: { in: grupoIds } },
       select: { codigo: true },
     });
 
-    return codigos.map((c) => c.codigo).filter((c) => c !== codigo);
+    return codigos.map((c) => c.codigo);
   }
 
   // =========================
@@ -93,15 +97,16 @@ export class ProductosService {
       throw new BadRequestException('No se enviaron items');
     }
 
-    const updates = dto.items.map((i) =>
-      this.prisma.productos.update({
-        where: { id: i.id },
-        data: { hay_stock: i.hay_stock },
-      }),
+    await this.prisma.$transaction(
+      dto.items.map((i) =>
+        this.prisma.productos.update({
+          where: { id: i.id },
+          data: { hay_stock: i.hay_stock },
+        }),
+      ),
     );
 
-    await this.prisma.$transaction(updates);
-    return { updated: updates.length };
+    return { updated: dto.items.length };
   }
 
   // =========================
@@ -114,16 +119,16 @@ export class ProductosService {
       throw new BadRequestException('No se enviaron items');
     }
 
-    const updates = dto.items.map((i) =>
-      this.prisma.productos.updateMany({
-        where: { sku: this.normalizeCodigo(i.sku) },
-        data: { precio: i.precio },
-      }),
+    const res = await this.prisma.$transaction(
+      dto.items.map((i) =>
+        this.prisma.productos.updateMany({
+          where: { sku: this.normalizeCodigo(i.sku) },
+          data: { precio: i.precio },
+        }),
+      ),
     );
 
-    const res = await this.prisma.$transaction(updates);
     const updated = res.reduce((a, b) => a + b.count, 0);
-
     return { updated };
   }
 
@@ -153,7 +158,9 @@ export class ProductosService {
       throw new NotFoundException('Producto no encontrado');
     }
 
-    const equivalencias = await this.equivalenciasPorCodigo(producto.sku);
+    const equivalencias = producto.sku
+      ? await this.equivalenciasIncluyendoCodigo(producto.sku)
+      : [];
 
     return { ...producto, equivalencias };
   }
@@ -185,48 +192,53 @@ export class ProductosService {
       limit = 20,
     } = params;
 
-    let equivalencias: string[] = [];
     let codigoBuscado: string | null = null;
+    let equivalencias: string[] = [];
 
     // =========================
-    // BÚSQUEDA POR CÓDIGO
+    // BÚSQUEDA POR CÓDIGO (CORE)
     // =========================
     if (q && this.pareceCodigo(q)) {
-      const qUp = q.toUpperCase();
       const qLoose = this.normalizeSkuLoose(q);
+      codigoBuscado = qLoose;
 
-      codigoBuscado = qUp;
-
-      // 1️⃣ Buscar producto por SKU "loose"
-      const productosBase = await this.prisma.$queryRaw<
-        Array<{ id: number; sku: string }>
+      // 1️⃣ Buscar producto directo
+      const productoDirecto = await this.prisma.$queryRaw<
+        Array<{ sku: string }>
       >`
-      SELECT id, sku
-      FROM productos
-      WHERE UPPER(
-        REGEXP_REPLACE(sku, '[^A-Z0-9]', '', 'g')
-      ) LIKE ${'%' + qLoose + '%'}
-      LIMIT 1
-    `;
-
-      if (productosBase.length) {
-        const skuReal = productosBase[0].sku;
-
-        // 2️⃣ Traer equivalencias reales del grupo
-        equivalencias = await this.equivalenciasPorCodigo(skuReal);
-
-        const codigosBusqueda = [skuReal, ...equivalencias].map((c) =>
-          this.normalizeSkuLoose(c),
-        );
-
-        // 3️⃣ Buscar productos cuyo SKU esté en el grupo
-        const data = await this.prisma.$queryRaw<any[]>`
-        SELECT *
+        SELECT sku
         FROM productos
-        WHERE UPPER(
-          REGEXP_REPLACE(sku, '[^A-Z0-9]', '', 'g')
-        ) = ANY (${codigosBusqueda})
+        WHERE UPPER(REGEXP_REPLACE(sku, '[^A-Z0-9]', '', 'g')) = ${qLoose}
+        LIMIT 1
       `;
+
+      // 2️⃣ Buscar equivalencias aunque NO exista producto
+      equivalencias = await this.equivalenciasIncluyendoCodigo(qLoose);
+
+      const codigosBusqueda = [
+        ...(productoDirecto.map((p) => p.sku) ?? []),
+        ...equivalencias,
+      ].map((c) => this.normalizeSkuLoose(c));
+
+      if (codigosBusqueda.length) {
+        let data: any[];
+
+        if (stock) {
+          data = await this.prisma.$queryRaw<any[]>`
+            SELECT *
+            FROM productos
+            WHERE UPPER(REGEXP_REPLACE(sku, '[^A-Z0-9]', '', 'g'))
+            = ANY (${codigosBusqueda})
+            AND hay_stock = true
+          `;
+        } else {
+          data = await this.prisma.$queryRaw<any[]>`
+            SELECT *
+            FROM productos
+            WHERE UPPER(REGEXP_REPLACE(sku, '[^A-Z0-9]', '', 'g'))
+            = ANY (${codigosBusqueda})
+          `;
+        }
 
         return {
           page: 1,
@@ -242,13 +254,12 @@ export class ProductosService {
     }
 
     // =========================
-    // BÚSQUEDA NORMAL (texto libre)
+    // BÚSQUEDA TEXTO NORMAL
     // =========================
     const where: Record<string, any> = {};
 
     if (q) {
       const terms = q.trim().split(/\s+/).filter(Boolean);
-
       where.AND = terms.map((term) => ({
         OR: [
           { nombre: { contains: term, mode: 'insensitive' } },
