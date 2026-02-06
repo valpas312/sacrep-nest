@@ -32,16 +32,16 @@ export class ProductosService {
   }
 
   // =========================
-  // EQUIVALENCIAS (BIDIRECCIONAL)
+  // EQUIVALENCIAS (BASE REAL)
   // =========================
-  private async equivalenciasIncluyendoCodigo(
+  private async obtenerGrupoEquivalencias(
     codigoRaw: string,
   ): Promise<string[]> {
-    const codigo = this.normalizeSkuLoose(codigoRaw);
+    const codigoNorm = this.normalizeSkuLoose(codigoRaw);
 
     const rows = await this.prisma.equivalencia_codigos.findMany({
       where: {
-        codigo: codigo,
+        codigo: codigoNorm,
       },
       select: { grupo_id: true },
     });
@@ -50,29 +50,22 @@ export class ProductosService {
 
     const grupoIds = rows.map((r) => r.grupo_id);
 
-    const equivalencias = await this.prisma.equivalencia_codigos.findMany({
-      where: {
-        grupo_id: { in: grupoIds },
-      },
+    const codigos = await this.prisma.equivalencia_codigos.findMany({
+      where: { grupo_id: { in: grupoIds } },
       select: { codigo: true },
     });
 
-    return equivalencias.map((e) => e.codigo);
+    return codigos.map((c) => c.codigo);
   }
 
-  // =========================
-  // API COMPATIBLE (CONTROLLER)
-  // =========================
+  // API pública (la usa el controller)
   async equivalenciasPorCodigo(codigoRaw?: string | null): Promise<string[]> {
     if (!codigoRaw) return [];
 
-    const codigoNorm = this.normalizeSkuLoose(codigoRaw);
+    const base = this.normalizeSkuLoose(codigoRaw);
+    const todas = await this.obtenerGrupoEquivalencias(codigoRaw);
 
-    const equivalencias = await this.equivalenciasIncluyendoCodigo(codigoRaw);
-
-    return equivalencias.filter(
-      (c) => this.normalizeSkuLoose(c) !== codigoNorm,
-    );
+    return todas.filter((c) => this.normalizeSkuLoose(c) !== base);
   }
 
   // =========================
@@ -88,9 +81,6 @@ export class ProductosService {
     });
   }
 
-  // =========================
-  // BATCH CREATE
-  // =========================
   async batchCreate(dto: BatchCreateProductosDto) {
     if (!dto.productos?.length) {
       throw new BadRequestException('No se enviaron productos');
@@ -110,9 +100,6 @@ export class ProductosService {
     return { count: created.length, data: created };
   }
 
-  // =========================
-  // BATCH UPDATE STOCK
-  // =========================
   async batchUpdateStock(dto: BatchUpdateStockDto) {
     if (!dto.items?.length) {
       throw new BadRequestException('No se enviaron items');
@@ -130,9 +117,6 @@ export class ProductosService {
     return { updated: dto.items.length };
   }
 
-  // =========================
-  // BATCH UPDATE PRECIOS POR SKU
-  // =========================
   async batchUpdatePreciosBySku(dto: {
     items: { sku: string; precio: number }[];
   }) {
@@ -149,30 +133,19 @@ export class ProductosService {
       ),
     );
 
-    const updated = res.reduce((a, b) => a + b.count, 0);
-    return { updated };
+    return { updated: res.reduce((a, b) => a + b.count, 0) };
   }
 
-  // =========================
-  // FIND ALL
-  // =========================
   async findAll() {
     return this.prisma.productos.findMany({
       include: { fabricantes: true, categorias: true, marcas: true },
     });
   }
 
-  // =========================
-  // FIND ONE
-  // =========================
   async findOne(id: number) {
     const producto = await this.prisma.productos.findUnique({
       where: { id },
-      include: {
-        fabricantes: true,
-        categorias: true,
-        marcas: true,
-      },
+      include: { fabricantes: true, categorias: true, marcas: true },
     });
 
     if (!producto) {
@@ -184,9 +157,6 @@ export class ProductosService {
     return { ...producto, equivalencias };
   }
 
-  // =========================
-  // DESTACADOS
-  // =========================
   async destacados() {
     return this.prisma.$queryRaw`
       SELECT *
@@ -197,101 +167,58 @@ export class ProductosService {
   }
 
   // =========================
-  // BUSCAR (CÓDIGO + TEXTO)
+  // BUSCAR (CÓDIGO CORRECTO)
   // =========================
   async buscar(params: BuscarProductosDto) {
-    const {
-      q,
-      marca,
-      categoria,
-      fabricante,
-      vehiculo,
-      stock,
-      page = 1,
-      limit = 20,
-    } = params;
+    const { q, stock, page = 1, limit = 20 } = params;
 
     let equivalencias: string[] = [];
     let codigoBuscado: string | null = null;
 
-    // =========================
-    // BÚSQUEDA POR CÓDIGO (ROBUSTA)
-    // =========================
     if (q && this.pareceCodigo(q)) {
       codigoBuscado = q.toUpperCase();
 
-      equivalencias = await this.equivalenciasIncluyendoCodigo(q);
+      const grupo = await this.obtenerGrupoEquivalencias(q);
 
-      if (equivalencias.length) {
+      if (grupo.length) {
+        equivalencias = grupo.filter(
+          (c) => this.normalizeSkuLoose(c) !== this.normalizeSkuLoose(q),
+        );
+
         const data = await this.prisma.productos.findMany({
           where: {
-            sku: { in: equivalencias },
+            sku: { in: grupo },
             ...(stock !== undefined ? { hay_stock: stock } : {}),
           },
-          take: limit,
-          skip: (page - 1) * limit,
         });
 
-        if (data.length) {
-          return {
-            page,
-            limit,
-            total: data.length,
-            q,
-            codigoBuscado,
-            equivalencias,
-            sugerencias: [],
-            data,
-          };
-        }
+        return {
+          page: 1,
+          limit: data.length,
+          total: data.length,
+          q,
+          codigoBuscado,
+          equivalencias,
+          sugerencias: [],
+          data,
+        };
       }
     }
 
-    // =========================
-    // BÚSQUEDA TEXTO LIBRE
-    // =========================
-    const where: any = {};
-
-    if (q) {
-      const terms = q.trim().split(/\s+/).filter(Boolean);
-
-      where.AND = terms.map((term) => ({
-        OR: [
-          { nombre: { contains: term, mode: 'insensitive' } },
-          { sku: { contains: term, mode: 'insensitive' } },
-        ],
-      }));
-    }
-
-    if (marca) where.marca = marca;
-    if (categoria) where.categoria = categoria;
-    if (fabricante) where.fabricante = fabricante;
-    if (stock !== undefined) where.hay_stock = stock;
-
-    if (vehiculo) {
-      where.producto_vehiculos = {
-        some: { vehiculo_id: vehiculo },
-      };
-    }
-
+    // fallback texto
     const data = await this.prisma.productos.findMany({
-      where,
-      include: {
-        marcas: true,
-        categorias: true,
-        fabricantes: true,
-        producto_vehiculos: vehiculo ? { include: { vehiculos: true } } : false,
+      where: {
+        OR: [
+          { nombre: { contains: q, mode: 'insensitive' } },
+          { sku: { contains: q, mode: 'insensitive' } },
+        ],
       },
-      skip: (page - 1) * limit,
-      take: limit,
     });
-
-    const total = await this.prisma.productos.count({ where });
 
     return {
       page,
       limit,
-      total,
+      total: data.length,
       q,
       codigoBuscado,
       equivalencias: [],
@@ -300,9 +227,6 @@ export class ProductosService {
     };
   }
 
-  // =========================
-  // UPDATE
-  // =========================
   async update(id: number, data: UpdateProductoDto) {
     await this.findOne(id);
 
@@ -315,9 +239,6 @@ export class ProductosService {
     });
   }
 
-  // =========================
-  // DELETE
-  // =========================
   async remove(id: number) {
     await this.findOne(id);
     return this.prisma.productos.delete({ where: { id } });
