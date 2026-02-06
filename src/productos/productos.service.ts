@@ -164,7 +164,7 @@ export class ProductosService {
   }
 
   // =========================
-  // BUSCAR (LÓGICA CORREGIDA)
+  // BUSCAR (FIX PARCIAL + EQUIVALENCIAS)
   // =========================
   async buscar(params: BuscarProductosDto) {
     const { q, stock, page = 1, limit = 20 } = params;
@@ -172,26 +172,41 @@ export class ProductosService {
     let codigoBuscado: string | null = null;
     let equivalencias: string[] = [];
 
-    // 🔹 CASO CÓDIGO (SIEMPRE)
     if (q && this.pareceCodigo(q)) {
-      codigoBuscado = this.normalizeSkuLoose(q);
+      const qNorm = this.normalizeSkuLoose(q);
+      codigoBuscado = qNorm;
 
-      const grupo = await this.obtenerGrupoEquivalencias(q);
+      // 1️⃣ buscar productos que coincidan parcialmente
+      const productosBase = await this.prisma.productos.findMany({
+        where: {
+          sku: { contains: qNorm },
+          ...(stock !== undefined ? { hay_stock: stock } : {}),
+        },
+      });
 
-      // incluimos el código buscado aunque no esté en la tabla
-      const codigosBusqueda = [
-        codigoBuscado,
-        ...grupo.filter((c) => this.normalizeSkuLoose(c) !== codigoBuscado),
-      ];
+      // 2️⃣ juntar SKUs reales encontrados
+      const skusEncontrados = productosBase
+        .map((p) => p.sku)
+        .filter(Boolean) as string[];
 
-      equivalencias = codigosBusqueda.filter(
-        (c) => this.normalizeSkuLoose(c) !== codigoBuscado,
+      // 3️⃣ resolver equivalencias desde TODOS los SKUs
+      const grupos = await Promise.all(
+        skusEncontrados.map((sku) => this.obtenerGrupoEquivalencias(sku)),
       );
 
+      const codigosGrupo = Array.from(
+        new Set([qNorm, ...skusEncontrados, ...grupos.flat()]),
+      ).filter(Boolean);
+
+      equivalencias = codigosGrupo.filter(
+        (c) => this.normalizeSkuLoose(c) !== qNorm,
+      );
+
+      // 4️⃣ traer todos los productos del grupo
       const data = await this.prisma.productos.findMany({
         where: {
-          OR: codigosBusqueda.map((c) => ({
-            sku: { contains: c },
+          OR: codigosGrupo.map((c) => ({
+            sku: { contains: this.normalizeSkuLoose(c) },
           })),
           ...(stock !== undefined ? { hay_stock: stock } : {}),
         },
@@ -209,7 +224,7 @@ export class ProductosService {
       };
     }
 
-    // 🔹 FALLBACK TEXTO
+    // fallback texto
     const data = await this.prisma.productos.findMany({
       where: {
         OR: [
