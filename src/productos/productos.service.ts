@@ -174,11 +174,12 @@ export class ProductosService {
       if (grupo.length) {
         const grupoLoose = grupo.map((c) => this.normalizeSkuLoose(c));
 
-        interface ProductoRow {
+        type ProductoRow = {
           sku: string;
-        }
+          [key: string]: any;
+        };
 
-        const dataCheck = await this.prisma.$queryRaw<ProductoRow[]>`
+        const data = await this.prisma.$queryRaw<ProductoRow[]>`
   SELECT *
   FROM productos
   WHERE UPPER(
@@ -188,23 +189,17 @@ export class ProductosService {
 `;
 
         const skuBase =
-          dataCheck.length > 0
-            ? this.normalizeSkuLoose(dataCheck[0].sku)
-            : qLoose;
+          data.length > 0 ? this.normalizeSkuLoose(data[0].sku) : qLoose;
 
-        equivalencias = grupo.filter(
-          (c) => this.normalizeSkuLoose(c) !== skuBase,
-        );
-
-        // 2️⃣ Traer productos reales del grupo
-        const data = await this.prisma.$queryRaw<any[]>`
-        SELECT *
-        FROM productos
-        WHERE UPPER(
-          REGEXP_REPLACE(sku, '[^A-Z0-9]', '', 'g')
-        ) = ANY (${grupoLoose})
-        AND (${stock} IS NULL OR hay_stock = ${stock})
-      `;
+        // ⬇️ FIX REAL
+        equivalencias = grupo
+          .filter((c) => this.normalizeSkuLoose(c) !== skuBase)
+          .filter((c) =>
+            data.some(
+              (p) =>
+                this.normalizeSkuLoose(p.sku) === this.normalizeSkuLoose(c),
+            ),
+          );
 
         return {
           page,
