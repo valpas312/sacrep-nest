@@ -168,8 +168,24 @@ export class ProductosService {
       const qLoose = this.normalizeSkuLoose(q);
       codigoBuscado = qLoose;
 
-      // 1️⃣ Resolver grupo aunque NO exista como producto
-      const grupo = await this.obtenerGrupoEquivalencias(q);
+      // 1️⃣ Resolver grupo por código buscado
+      let grupo = await this.obtenerGrupoEquivalencias(q);
+
+      // 🔁 FALLBACK: si no hay grupo, buscar producto real y usar su SKU
+      if (!grupo.length) {
+        const productoBase = await this.prisma.productos.findFirst({
+          where: {
+            sku: {
+              contains: qLoose,
+              mode: Prisma.QueryMode.insensitive,
+            },
+          },
+        });
+
+        if (productoBase?.sku) {
+          grupo = await this.obtenerGrupoEquivalencias(productoBase.sku);
+        }
+      }
 
       if (grupo.length) {
         const grupoLoose = grupo.map((c) => this.normalizeSkuLoose(c));
