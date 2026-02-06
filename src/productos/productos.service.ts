@@ -38,10 +38,10 @@ export class ProductosService {
   private async obtenerGrupoEquivalencias(
     codigoRaw: string,
   ): Promise<string[]> {
-    const codigoNorm = this.normalizeSkuLoose(codigoRaw);
+    const codigo = this.normalizeSkuLoose(codigoRaw);
 
     const rows = await this.prisma.equivalencia_codigos.findMany({
-      where: { codigo: codigoNorm },
+      where: { codigo },
       select: { grupo_id: true },
     });
 
@@ -71,26 +71,19 @@ export class ProductosService {
   // =========================
   async create(data: CreateProductoDto) {
     return this.prisma.productos.create({
-      data: {
-        ...data,
-        sku: this.normalizeCodigo(data.sku),
-      },
+      data: { ...data, sku: this.normalizeCodigo(data.sku) },
       include: { fabricantes: true, categorias: true, marcas: true },
     });
   }
 
   async batchCreate(dto: BatchCreateProductosDto) {
-    if (!dto.productos?.length) {
+    if (!dto.productos?.length)
       throw new BadRequestException('No se enviaron productos');
-    }
 
     const created = await this.prisma.$transaction(
       dto.productos.map((p) =>
         this.prisma.productos.create({
-          data: {
-            ...p,
-            sku: this.normalizeCodigo(p.sku),
-          },
+          data: { ...p, sku: this.normalizeCodigo(p.sku) },
         }),
       ),
     );
@@ -99,9 +92,8 @@ export class ProductosService {
   }
 
   async batchUpdateStock(dto: BatchUpdateStockDto) {
-    if (!dto.items?.length) {
+    if (!dto.items?.length)
       throw new BadRequestException('No se enviaron items');
-    }
 
     await this.prisma.$transaction(
       dto.items.map((i) =>
@@ -118,9 +110,8 @@ export class ProductosService {
   async batchUpdatePreciosBySku(dto: {
     items: { sku: string; precio: number }[];
   }) {
-    if (!dto.items?.length) {
+    if (!dto.items?.length)
       throw new BadRequestException('No se enviaron items');
-    }
 
     const res = await this.prisma.$transaction(
       dto.items.map((i) =>
@@ -146,12 +137,9 @@ export class ProductosService {
       include: { fabricantes: true, categorias: true, marcas: true },
     });
 
-    if (!producto) {
-      throw new NotFoundException('Producto no encontrado');
-    }
+    if (!producto) throw new NotFoundException('Producto no encontrado');
 
     const equivalencias = await this.equivalenciasPorCodigo(producto.sku);
-
     return { ...producto, equivalencias };
   }
 
@@ -165,7 +153,7 @@ export class ProductosService {
   }
 
   // =========================
-  // BUSCAR (FIX PARCIAL + EQUIVALENCIAS)
+  // BUSCAR (CORREGIDO FINAL)
   // =========================
   async buscar(params: BuscarProductosDto) {
     const { q, stock, page = 1, limit = 20 } = params;
@@ -173,61 +161,45 @@ export class ProductosService {
     let codigoBuscado: string | null = null;
     let equivalencias: string[] = [];
 
+    // =========================
+    // BÚSQUEDA POR CÓDIGO
+    // =========================
     if (q && this.pareceCodigo(q)) {
-      const qNorm = this.normalizeSkuLoose(q);
-      codigoBuscado = qNorm;
+      const qLoose = this.normalizeSkuLoose(q);
+      codigoBuscado = qLoose;
 
-      // 1️⃣ buscar productos que coincidan parcialmente
-      const productosBase = await this.prisma.productos.findMany({
-        where: {
-          sku: { contains: qNorm },
-          ...(stock !== undefined ? { hay_stock: stock } : {}),
-        },
-      });
+      // 1️⃣ resolver grupo de equivalencias (aunque no exista como producto)
+      const grupo = await this.obtenerGrupoEquivalencias(q);
 
-      // 2️⃣ juntar SKUs reales encontrados
-      const skusEncontrados = productosBase
-        .map((p) => p.sku)
-        .filter(Boolean) as string[];
+      if (grupo.length) {
+        const grupoLoose = grupo.map((c) => this.normalizeSkuLoose(c));
 
-      // 3️⃣ resolver equivalencias desde TODOS los SKUs
-      const grupos = await Promise.all(
-        skusEncontrados.map((sku) => this.obtenerGrupoEquivalencias(sku)),
-      );
+        equivalencias = grupo.filter(
+          (c) => this.normalizeSkuLoose(c) !== qLoose,
+        );
 
-      const codigosGrupo = Array.from(
-        new Set([qNorm, ...skusEncontrados, ...grupos.flat()]),
-      ).filter(Boolean);
+        // 2️⃣ traer productos reales del grupo (loose match)
+        const stockClause =
+          stock !== undefined ? `AND hay_stock = ${stock}` : '';
+        const data = await this.prisma.$queryRaw<any[]>(
+          Prisma.sql`SELECT * FROM productos WHERE UPPER(REGEXP_REPLACE(sku, '[^A-Z0-9]', '', 'g')) = ANY(${Prisma.join(grupoLoose)}) ${Prisma.raw(stockClause)}`,
+        );
 
-      equivalencias = codigosGrupo.filter(
-        (c) => this.normalizeSkuLoose(c) !== qNorm,
-      );
-
-      // 4️⃣ traer todos los productos del grupo
-      const data = await this.prisma.productos.findMany({
-        where: {
-          OR: codigosGrupo.map((c) => ({
-            sku: { contains: this.normalizeSkuLoose(c) },
-          })),
-          ...(stock !== undefined ? { hay_stock: stock } : {}),
-        },
-      });
-
-      return {
-        page,
-        limit,
-        total: data.length,
-        q,
-        codigoBuscado,
-        equivalencias,
-        sugerencias: [],
-        data,
-      };
+        return {
+          page,
+          limit: data.length,
+          total: data.length,
+          q,
+          codigoBuscado,
+          equivalencias,
+          sugerencias: [],
+          data,
+        };
+      }
     }
 
-    // fallback texto
     // =========================
-    // BÚSQUEDA TEXTO INTELIGENTE
+    // BÚSQUEDA TEXTO (AND real)
     // =========================
     const terms =
       q
@@ -247,7 +219,12 @@ export class ProductosService {
                     mode: Prisma.QueryMode.insensitive,
                   },
                 },
-                { sku: { contains: term, mode: Prisma.QueryMode.insensitive } },
+                {
+                  sku: {
+                    contains: term,
+                    mode: Prisma.QueryMode.insensitive,
+                  },
+                },
               ],
             })),
           }
