@@ -32,7 +32,7 @@ export class ProductosService {
   }
 
   // =========================
-  // EQUIVALENCIAS (BASE REAL)
+  // EQUIVALENCIAS
   // =========================
   private async obtenerGrupoEquivalencias(
     codigoRaw: string,
@@ -40,9 +40,7 @@ export class ProductosService {
     const codigoNorm = this.normalizeSkuLoose(codigoRaw);
 
     const rows = await this.prisma.equivalencia_codigos.findMany({
-      where: {
-        codigo: codigoNorm,
-      },
+      where: { codigo: codigoNorm },
       select: { grupo_id: true },
     });
 
@@ -58,7 +56,6 @@ export class ProductosService {
     return codigos.map((c) => c.codigo);
   }
 
-  // API pública (la usa el controller)
   async equivalenciasPorCodigo(codigoRaw?: string | null): Promise<string[]> {
     if (!codigoRaw) return [];
 
@@ -69,7 +66,7 @@ export class ProductosService {
   }
 
   // =========================
-  // CREATE
+  // CREATE / UPDATE / DELETE
   // =========================
   async create(data: CreateProductoDto) {
     return this.prisma.productos.create({
@@ -167,45 +164,52 @@ export class ProductosService {
   }
 
   // =========================
-  // BUSCAR (CÓDIGO CORRECTO)
+  // BUSCAR (LÓGICA CORREGIDA)
   // =========================
   async buscar(params: BuscarProductosDto) {
     const { q, stock, page = 1, limit = 20 } = params;
 
-    let equivalencias: string[] = [];
     let codigoBuscado: string | null = null;
+    let equivalencias: string[] = [];
 
+    // 🔹 CASO CÓDIGO (SIEMPRE)
     if (q && this.pareceCodigo(q)) {
-      codigoBuscado = q.toUpperCase();
+      codigoBuscado = this.normalizeSkuLoose(q);
 
       const grupo = await this.obtenerGrupoEquivalencias(q);
 
-      if (grupo.length) {
-        equivalencias = grupo.filter(
-          (c) => this.normalizeSkuLoose(c) !== this.normalizeSkuLoose(q),
-        );
+      // incluimos el código buscado aunque no esté en la tabla
+      const codigosBusqueda = [
+        codigoBuscado,
+        ...grupo.filter((c) => this.normalizeSkuLoose(c) !== codigoBuscado),
+      ];
 
-        const data = await this.prisma.productos.findMany({
-          where: {
-            sku: { in: grupo },
-            ...(stock !== undefined ? { hay_stock: stock } : {}),
-          },
-        });
+      equivalencias = codigosBusqueda.filter(
+        (c) => this.normalizeSkuLoose(c) !== codigoBuscado,
+      );
 
-        return {
-          page: 1,
-          limit: data.length,
-          total: data.length,
-          q,
-          codigoBuscado,
-          equivalencias,
-          sugerencias: [],
-          data,
-        };
-      }
+      const data = await this.prisma.productos.findMany({
+        where: {
+          OR: codigosBusqueda.map((c) => ({
+            sku: { contains: c },
+          })),
+          ...(stock !== undefined ? { hay_stock: stock } : {}),
+        },
+      });
+
+      return {
+        page,
+        limit,
+        total: data.length,
+        q,
+        codigoBuscado,
+        equivalencias,
+        sugerencias: [],
+        data,
+      };
     }
 
-    // fallback texto
+    // 🔹 FALLBACK TEXTO
     const data = await this.prisma.productos.findMany({
       where: {
         OR: [
