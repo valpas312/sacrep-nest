@@ -168,7 +168,23 @@ export class ProductosService {
       const qLoose = this.normalizeSkuLoose(q);
       codigoBuscado = qLoose;
 
-      const grupo = await this.obtenerGrupoEquivalencias(q);
+      let grupo = await this.obtenerGrupoEquivalencias(q);
+
+      // 🔑 Resolver primero un SKU real si el código no existe
+      if (!grupo.length) {
+        const base = await this.prisma.$queryRaw<{ sku: string }[]>`
+          SELECT sku
+          FROM productos
+          WHERE UPPER(
+            REGEXP_REPLACE(sku, '[^A-Z0-9]', '', 'g')
+          ) LIKE '%' || ${qLoose} || '%'
+          LIMIT 1
+        `;
+
+        if (base[0]?.sku) {
+          grupo = await this.obtenerGrupoEquivalencias(base[0].sku);
+        }
+      }
 
       const codigosBuscar =
         grupo.length > 0
@@ -181,25 +197,18 @@ export class ProductosService {
       };
 
       const data = await this.prisma.$queryRaw<ProductoRow[]>`
-  SELECT *
-  FROM productos
-  WHERE UPPER(
-    REGEXP_REPLACE(sku, '[^A-Z0-9]', '', 'g')
-  ) = ANY (${codigosBuscar})
-  AND (${stock} IS NULL OR hay_stock = ${stock})
-`;
+        SELECT *
+        FROM productos
+        WHERE UPPER(
+          REGEXP_REPLACE(sku, '[^A-Z0-9]', '', 'g')
+        ) = ANY (${codigosBuscar})
+        AND (${stock} IS NULL OR hay_stock = ${stock})
+      `;
 
       if (data.length) {
         const skuBase = this.normalizeSkuLoose(data[0].sku);
 
-        // 🔹 Si no hubo grupo por el código buscado,
-        // resolvemos equivalencias desde el SKU encontrado
-        const grupoFinal =
-          grupo.length > 0
-            ? grupo
-            : await this.obtenerGrupoEquivalencias(data[0].sku);
-
-        equivalencias = grupoFinal.filter(
+        equivalencias = grupo.filter(
           (c) => this.normalizeSkuLoose(c) !== skuBase,
         );
 
