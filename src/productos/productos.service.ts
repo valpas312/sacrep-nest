@@ -153,7 +153,7 @@ export class ProductosService {
   }
 
   // =========================
-  // BUSCAR (FIX DEFINITIVO)
+  // BUSCAR
   // =========================
   async buscar(params: BuscarProductosDto) {
     const { q, stock, page = 1, limit = 20 } = params;
@@ -168,22 +168,22 @@ export class ProductosService {
       const qLoose = this.normalizeSkuLoose(q);
       codigoBuscado = qLoose;
 
-      // 1️⃣ Resolver grupo por código buscado
       let grupo = await this.obtenerGrupoEquivalencias(q);
 
-      // 🔁 FALLBACK: si no hay grupo, buscar producto real y usar su SKU
+      // ✅ FIX PGK-003 — fallback normalizado
       if (!grupo.length) {
-        const productoBase = await this.prisma.productos.findFirst({
-          where: {
-            sku: {
-              contains: qLoose,
-              mode: Prisma.QueryMode.insensitive,
-            },
-          },
-        });
+        const rows = await this.prisma.$queryRaw<{ sku: string }[]>`
+          SELECT sku
+          FROM productos
+          WHERE UPPER(
+            REGEXP_REPLACE(sku, '[^A-Z0-9]', '', 'g')
+          ) LIKE '%' || ${qLoose} || '%'
+          LIMIT 1
+        `;
 
-        if (productoBase?.sku) {
-          grupo = await this.obtenerGrupoEquivalencias(productoBase.sku);
+        const baseSku = rows[0]?.sku;
+        if (baseSku) {
+          grupo = await this.obtenerGrupoEquivalencias(baseSku);
         }
       }
 
@@ -196,24 +196,24 @@ export class ProductosService {
         };
 
         const data = await this.prisma.$queryRaw<ProductoRow[]>`
-  SELECT *
-  FROM productos
-  WHERE UPPER(
-    REGEXP_REPLACE(sku, '[^A-Z0-9]', '', 'g')
-  ) = ANY (${grupoLoose})
-  AND (${stock} IS NULL OR hay_stock = ${stock})
-`;
+          SELECT *
+          FROM productos
+          WHERE UPPER(
+            REGEXP_REPLACE(sku, '[^A-Z0-9]', '', 'g')
+          ) = ANY (${grupoLoose})
+          AND (${stock} IS NULL OR hay_stock = ${stock})
+        `;
 
         const skuBase =
           data.length > 0 ? this.normalizeSkuLoose(data[0].sku) : qLoose;
 
-        // ⬇️ FIX REAL
         equivalencias = grupo
           .filter((c) => this.normalizeSkuLoose(c) !== skuBase)
           .filter((c) =>
             data.some(
               (p) =>
-                this.normalizeSkuLoose(p.sku) === this.normalizeSkuLoose(c),
+                this.normalizeSkuLoose(p.sku) ===
+                this.normalizeSkuLoose(c),
             ),
           );
 
@@ -231,7 +231,7 @@ export class ProductosService {
     }
 
     // =========================
-    // BÚSQUEDA TEXTO (AND REAL)
+    // BÚSQUEDA TEXTO
     // =========================
     const terms =
       q
