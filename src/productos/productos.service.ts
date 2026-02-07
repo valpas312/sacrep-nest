@@ -198,14 +198,16 @@ export class ProductosService {
       if (data.length) {
         const skuBase = this.normalizeSkuLoose(data[0].sku);
 
-        equivalencias = grupo
-          .filter((c) => this.normalizeSkuLoose(c) !== skuBase)
-          .filter((c) =>
-            data.some(
-              (p) =>
-                this.normalizeSkuLoose(p.sku) === this.normalizeSkuLoose(c),
-            ),
-          );
+        // 🔹 Si no hubo grupo por el código buscado,
+        // resolvemos equivalencias desde el SKU encontrado
+        const grupoFinal =
+          grupo.length > 0
+            ? grupo
+            : await this.obtenerGrupoEquivalencias(data[0].sku);
+
+        equivalencias = grupoFinal.filter(
+          (c) => this.normalizeSkuLoose(c) !== skuBase,
+        );
 
         return {
           page,
