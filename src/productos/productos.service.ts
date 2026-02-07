@@ -183,9 +183,15 @@ export class ProductosService {
       const data = await this.prisma.$queryRaw<ProductoRow[]>`
   SELECT *
   FROM productos
-  WHERE UPPER(
-    REGEXP_REPLACE(sku, '[^A-Z0-9]', '', 'g')
-  ) = ANY (${codigosBuscar})
+  WHERE (
+    ${codigosBuscar} IS NOT NULL
+    AND UPPER(
+      REGEXP_REPLACE(sku, '[^A-Z0-9]', '', 'g')
+    ) LIKE ANY (
+      SELECT '%' || c || '%'
+      FROM unnest(${codigosBuscar}) AS c
+    )
+  )
   AND (${stock} IS NULL OR hay_stock = ${stock})
 `;
 
