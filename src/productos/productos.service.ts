@@ -169,19 +169,21 @@ export class ProductosService {
       codigoBuscado = qLoose;
 
       let grupo = await this.obtenerGrupoEquivalencias(q);
+      let skuBaseEncontrado: string | null = null;
 
       // 🔑 Resolver primero un SKU real si el código no existe
       if (!grupo.length) {
         const base = await this.prisma.$queryRaw<{ sku: string }[]>`
-          SELECT sku
-          FROM productos
-          WHERE UPPER(
-            REGEXP_REPLACE(sku, '[^A-Z0-9]', '', 'g')
-          ) LIKE '%' || ${qLoose} || '%'
-          LIMIT 1
-        `;
+    SELECT sku
+    FROM productos
+    WHERE UPPER(
+      REGEXP_REPLACE(sku, '[^A-Z0-9]', '', 'g')
+    ) LIKE '%' || ${qLoose} || '%'
+    LIMIT 1
+  `;
 
         if (base[0]?.sku) {
+          skuBaseEncontrado = base[0].sku;
           grupo = await this.obtenerGrupoEquivalencias(base[0].sku);
         }
       }
@@ -189,7 +191,9 @@ export class ProductosService {
       const codigosBuscar =
         grupo.length > 0
           ? grupo.map((c) => this.normalizeSkuLoose(c))
-          : [qLoose];
+          : skuBaseEncontrado
+            ? [this.normalizeSkuLoose(skuBaseEncontrado)]
+            : [qLoose];
 
       type ProductoRow = {
         sku: string;
