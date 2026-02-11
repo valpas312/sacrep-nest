@@ -230,7 +230,7 @@ export class ProductosService {
     }
 
     // =========================
-    // BÚSQUEDA TEXTO
+    // BÚSQUEDA TEXTO / FILTROS
     // =========================
     const terms =
       q
@@ -239,33 +239,38 @@ export class ProductosService {
         .split(/\s+/)
         .filter((t) => t.length > 1) ?? [];
 
-    const where: Prisma.productosWhereInput =
-      terms.length > 0
-        ? {
-            AND: terms.map((term) => ({
-              OR: [
-                {
-                  nombre: {
-                    contains: term,
-                    mode: Prisma.QueryMode.insensitive,
-                  },
-                },
-                {
-                  sku: {
-                    contains: term,
-                    mode: Prisma.QueryMode.insensitive,
-                  },
-                },
-              ],
-            })),
-          }
-        : {};
+    const andFilters: Prisma.productosWhereInput[] = [];
+
+    // 🔹 filtros estructurales
+    if (params.marca) andFilters.push({ marca: params.marca });
+    if (params.categoria) andFilters.push({ categoria: params.categoria });
+    if (params.fabricante) andFilters.push({ fabricante: params.fabricante });
+    if (stock !== undefined) andFilters.push({ hay_stock: stock });
+
+    // 🔹 búsqueda textual SOLO si hay terms
+    if (terms.length > 0) {
+      andFilters.push({
+        AND: terms.map((term) => ({
+          OR: [
+            {
+              nombre: {
+                contains: term,
+                mode: Prisma.QueryMode.insensitive,
+              },
+            },
+            {
+              sku: {
+                contains: term,
+                mode: Prisma.QueryMode.insensitive,
+              },
+            },
+          ],
+        })),
+      });
+    }
 
     const data = await this.prisma.productos.findMany({
-      where: {
-        ...where,
-        ...(stock !== undefined ? { hay_stock: stock } : {}),
-      },
+      where: andFilters.length > 0 ? { AND: andFilters } : undefined,
     });
 
     return {
