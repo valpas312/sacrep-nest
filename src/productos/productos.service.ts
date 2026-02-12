@@ -24,8 +24,8 @@ export class ProductosService {
     return s || null;
   }
 
-  private normalizeSkuLoose(value: string) {
-    return value.replace(/[^A-Z0-9]/gi, '').toUpperCase();
+  private normalizeSkuLoose(value: string | null) {
+    return (value ?? '').replace(/[^A-Z0-9]/gi, '').toUpperCase();
   }
 
   private pareceCodigo(term: string) {
@@ -278,15 +278,66 @@ export class ProductosService {
       where: andFilters.length > 0 ? { AND: andFilters } : undefined,
     });
 
+    if (!data.length) {
+      return {
+        page,
+        limit,
+        total: 0,
+        q,
+        codigoBuscado,
+        equivalencias: [],
+        sugerencias: [],
+        data: [],
+      };
+    }
+
+    // 🔹 Calcular equivalencias igual que en búsqueda por código
+    const codigosSet = new Set<string>();
+
+    for (const producto of data) {
+      const skuLoose = this.normalizeSkuLoose(producto.sku);
+
+      codigosSet.add(skuLoose);
+
+      if (producto.sku) {
+        const grupo = await this.obtenerGrupoEquivalencias(producto.sku);
+
+        for (const codigo of grupo) {
+          codigosSet.add(this.normalizeSkuLoose(codigo));
+        }
+      }
+    }
+
+    const codigosBuscar = Array.from(codigosSet);
+
+    // Traer productos equivalentes que no estén ya en data
+    type ProductoRow = {
+      sku: string;
+      [key: string]: any;
+    };
+
+    const equivalentes = await this.prisma.$queryRaw<ProductoRow[]>`
+  SELECT *
+  FROM productos
+  WHERE UPPER(
+    REGEXP_REPLACE(sku, '[^A-Z0-9]', '', 'g')
+  ) = ANY (${codigosBuscar})
+  AND (${stock} IS NULL OR hay_stock = ${stock})
+`;
+
+    const encontradosLoose = data.map((p) => this.normalizeSkuLoose(p.sku));
+
+    equivalencias = codigosBuscar.filter((c) => !encontradosLoose.includes(c));
+
     return {
       page,
-      limit,
-      total: data.length,
+      limit: equivalentes.length,
+      total: equivalentes.length,
       q,
       codigoBuscado,
-      equivalencias: [],
+      equivalencias,
       sugerencias: [],
-      data,
+      data: equivalentes,
     };
   }
 
