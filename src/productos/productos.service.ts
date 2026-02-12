@@ -201,13 +201,18 @@ export class ProductosService {
         skusBase = skusEncontrados.map((r) => r.sku);
       } else {
         // 🔥 NUEVO: verificar si el código existe en equivalencias aunque no exista producto
-        const existeEnEquivalencias =
-          await this.prisma.equivalencia_codigos.findFirst({
-            where: { codigo: qLoose },
-            select: { codigo: true },
-          });
+        const existeEnEquivalencias = await this.prisma.$queryRaw<
+          { codigo: string }[]
+        >`
+    SELECT codigo
+    FROM equivalencia_codigos
+    WHERE UPPER(
+      REGEXP_REPLACE(codigo, '[^A-Z0-9]', '', 'g')
+    ) = ${qLoose}
+    LIMIT 1
+  `;
 
-        if (existeEnEquivalencias) {
+        if (existeEnEquivalencias.length) {
           skusBase = [qLoose];
         }
       }
