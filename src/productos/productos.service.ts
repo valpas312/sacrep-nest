@@ -66,6 +66,23 @@ export class ProductosService {
     return todas.filter((c) => this.normalizeSkuLoose(c) !== base);
   }
 
+  private async obtenerEquivalenciasMasivas(
+    skusBase: string[],
+  ): Promise<string[]> {
+    if (!skusBase.length) return [];
+
+    const codigosSet = new Set<string>();
+
+    for (const sku of skusBase) {
+      const grupo = await this.obtenerGrupoEquivalencias(sku);
+      for (const codigo of grupo) {
+        codigosSet.add(this.normalizeSkuLoose(codigo));
+      }
+    }
+
+    return Array.from(codigosSet);
+  }
+
   // =========================
   // CREATE / UPDATE / DELETE
   // =========================
@@ -168,7 +185,7 @@ export class ProductosService {
       const qLoose = this.normalizeSkuLoose(q);
       codigoBuscado = qLoose;
 
-      // 1️⃣ Buscar TODOS los SKUs que contengan el fragmento
+      // 1️⃣ Buscar SKUs que contengan el fragmento
       const skusEncontrados = await this.prisma.$queryRaw<{ sku: string }[]>`
     SELECT sku
     FROM productos
@@ -177,30 +194,34 @@ export class ProductosService {
     ) LIKE '%' || ${qLoose} || '%'
   `;
 
+      let skusBase: string[] = [];
+
       if (skusEncontrados.length) {
-        const codigosSet = new Set<string>();
+        // Si existen productos que coinciden
+        skusBase = skusEncontrados.map((r) => r.sku);
+      } else {
+        // 🔥 NUEVO: verificar si el código existe en equivalencias aunque no exista producto
+        const existeEnEquivalencias =
+          await this.prisma.equivalencia_codigos.findFirst({
+            where: { codigo: qLoose },
+            select: { codigo: true },
+          });
 
-        for (const row of skusEncontrados) {
-          const skuLoose = this.normalizeSkuLoose(row.sku);
-
-          // agregar el propio SKU
-          codigosSet.add(skuLoose);
-
-          // obtener grupo de equivalencias de cada SKU
-          const grupo = await this.obtenerGrupoEquivalencias(row.sku);
-
-          for (const codigo of grupo) {
-            codigosSet.add(this.normalizeSkuLoose(codigo));
-          }
+        if (existeEnEquivalencias) {
+          skusBase = [qLoose];
         }
+      }
 
-        const codigosBuscar = Array.from(codigosSet);
+      if (skusBase.length) {
+        // 2️⃣ Obtener todos los códigos equivalentes en una sola consulta
+        const codigosBuscar = await this.obtenerEquivalenciasMasivas(skusBase);
 
         type ProductoRow = {
           sku: string;
           [key: string]: any;
         };
 
+        // 3️⃣ Traer productos existentes de ese grupo
         const data = await this.prisma.$queryRaw<ProductoRow[]>`
       SELECT *
       FROM productos
@@ -210,27 +231,22 @@ export class ProductosService {
       AND (${stock} IS NULL OR hay_stock = ${stock})
     `;
 
-        if (data.length) {
-          // calcular equivalencias globales
-          const encontradosLoose = data.map((p) =>
-            this.normalizeSkuLoose(p.sku),
-          );
+        const encontradosLoose = data.map((p) => this.normalizeSkuLoose(p.sku));
 
-          equivalencias = codigosBuscar.filter(
-            (c) => !encontradosLoose.includes(c),
-          );
+        equivalencias = codigosBuscar.filter(
+          (c) => !encontradosLoose.includes(c),
+        );
 
-          return {
-            page,
-            limit: data.length,
-            total: data.length,
-            q,
-            codigoBuscado,
-            equivalencias,
-            sugerencias: [],
-            data,
-          };
-        }
+        return {
+          page,
+          limit: data.length,
+          total: data.length,
+          q,
+          codigoBuscado,
+          equivalencias,
+          sugerencias: [],
+          data,
+        };
       }
     }
 
