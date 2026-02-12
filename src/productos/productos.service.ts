@@ -168,7 +168,11 @@ export class ProductosService {
       const qLoose = this.normalizeSkuLoose(q);
       codigoBuscado = qLoose;
 
-      // 1️⃣ Buscar TODOS los SKUs que contengan el fragmento
+      const codigosSet = new Set<string>();
+
+      // ===============================
+      // 1️⃣ Buscar coincidencias directas en productos
+      // ===============================
       const skusEncontrados = await this.prisma.$queryRaw<{ sku: string }[]>`
     SELECT sku
     FROM productos
@@ -177,23 +181,39 @@ export class ProductosService {
     ) LIKE ${'%' + qLoose + '%'}
   `;
 
-      if (skusEncontrados.length) {
-        const codigosSet = new Set<string>();
+      for (const row of skusEncontrados) {
+        const skuLoose = this.normalizeSkuLoose(row.sku);
+        codigosSet.add(skuLoose);
 
-        for (const row of skusEncontrados) {
-          const skuLoose = this.normalizeSkuLoose(row.sku);
-
-          // agregar el propio SKU
-          codigosSet.add(skuLoose);
-
-          // obtener grupo de equivalencias de cada SKU
-          const grupo = await this.obtenerGrupoEquivalencias(row.sku);
-
-          for (const codigo of grupo) {
-            codigosSet.add(this.normalizeSkuLoose(codigo));
-          }
+        const grupo = await this.obtenerGrupoEquivalencias(row.sku);
+        for (const codigo of grupo) {
+          codigosSet.add(this.normalizeSkuLoose(codigo));
         }
+      }
 
+      // ===============================
+      // 2️⃣ 🔥 NUEVO: buscar si el término existe como equivalencia
+      // ===============================
+      const gruposDesdeEquivalencia =
+        await this.prisma.equivalencia_codigos.findMany({
+          where: { codigo: qLoose },
+          select: { grupo_id: true },
+        });
+
+      if (gruposDesdeEquivalencia.length) {
+        const grupoIds = gruposDesdeEquivalencia.map((g) => g.grupo_id);
+
+        const codigosGrupo = await this.prisma.equivalencia_codigos.findMany({
+          where: { grupo_id: { in: grupoIds } },
+          select: { codigo: true },
+        });
+
+        for (const c of codigosGrupo) {
+          codigosSet.add(this.normalizeSkuLoose(c.codigo));
+        }
+      }
+
+      if (codigosSet.size > 0) {
         const codigosBuscar = Array.from(codigosSet);
 
         type ProductoRow = {
@@ -211,7 +231,6 @@ export class ProductosService {
     `;
 
         if (data.length) {
-          // calcular equivalencias globales
           const encontradosLoose = data.map((p) =>
             this.normalizeSkuLoose(p.sku),
           );
