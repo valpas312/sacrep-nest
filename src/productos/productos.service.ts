@@ -38,17 +38,22 @@ export class ProductosService {
   private async obtenerGrupoEquivalencias(
     codigoRaw: string,
   ): Promise<string[]> {
-    const codigo = this.normalizeSkuLoose(codigoRaw);
+    const codigoLoose = this.normalizeSkuLoose(codigoRaw);
 
-    const rows = await this.prisma.equivalencia_codigos.findMany({
-      where: { codigo },
-      select: { grupo_id: true },
-    });
+    // 1️⃣ Buscar grupo normalizando en SQL
+    const grupos = await this.prisma.$queryRaw<{ grupo_id: number }[]>`
+    SELECT grupo_id
+    FROM equivalencia_codigos
+    WHERE UPPER(
+      REGEXP_REPLACE(codigo, '[^A-Z0-9]', '', 'g')
+    ) = ${codigoLoose}
+  `;
 
-    if (!rows.length) return [];
+    if (!grupos.length) return [];
 
-    const grupoIds = rows.map((r) => r.grupo_id);
+    const grupoIds = grupos.map((g) => g.grupo_id);
 
+    // 2️⃣ Traer todos los códigos del grupo
     const codigos = await this.prisma.equivalencia_codigos.findMany({
       where: { grupo_id: { in: grupoIds } },
       select: { codigo: true },
