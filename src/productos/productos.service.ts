@@ -38,22 +38,17 @@ export class ProductosService {
   private async obtenerGrupoEquivalencias(
     codigoRaw: string,
   ): Promise<string[]> {
-    const codigoLoose = this.normalizeSkuLoose(codigoRaw);
+    const codigo = this.normalizeSkuLoose(codigoRaw);
 
-    // 1️⃣ Buscar grupo normalizando en SQL
-    const grupos = await this.prisma.$queryRaw<{ grupo_id: number }[]>`
-    SELECT grupo_id
-    FROM equivalencia_codigos
-    WHERE UPPER(
-      REGEXP_REPLACE(codigo, '[^A-Z0-9]', '', 'g')
-    ) = ${codigoLoose}
-  `;
+    const rows = await this.prisma.equivalencia_codigos.findMany({
+      where: { codigo },
+      select: { grupo_id: true },
+    });
 
-    if (!grupos.length) return [];
+    if (!rows.length) return [];
 
-    const grupoIds = grupos.map((g) => g.grupo_id);
+    const grupoIds = rows.map((r) => r.grupo_id);
 
-    // 2️⃣ Traer todos los códigos del grupo
     const codigos = await this.prisma.equivalencia_codigos.findMany({
       where: { grupo_id: { in: grupoIds } },
       select: { codigo: true },
@@ -69,23 +64,6 @@ export class ProductosService {
     const todas = await this.obtenerGrupoEquivalencias(codigoRaw);
 
     return todas.filter((c) => this.normalizeSkuLoose(c) !== base);
-  }
-
-  private async obtenerEquivalenciasMasivas(
-    skusBase: string[],
-  ): Promise<string[]> {
-    if (!skusBase.length) return [];
-
-    const codigosSet = new Set<string>();
-
-    for (const sku of skusBase) {
-      const grupo = await this.obtenerGrupoEquivalencias(sku);
-      for (const codigo of grupo) {
-        codigosSet.add(this.normalizeSkuLoose(codigo));
-      }
-    }
-
-    return Array.from(codigosSet);
   }
 
   // =========================
@@ -190,48 +168,39 @@ export class ProductosService {
       const qLoose = this.normalizeSkuLoose(q);
       codigoBuscado = qLoose;
 
-      // 1️⃣ Buscar SKUs que contengan el fragmento
+      // 1️⃣ Buscar TODOS los SKUs que contengan el fragmento
       const skusEncontrados = await this.prisma.$queryRaw<{ sku: string }[]>`
     SELECT sku
     FROM productos
     WHERE UPPER(
       REGEXP_REPLACE(sku, '[^A-Z0-9]', '', 'g')
-    ) LIKE '%' || ${qLoose} || '%'
+    ) LIKE ${'%' + qLoose + '%'}
   `;
-
-      let skusBase: string[] = [];
 
       if (skusEncontrados.length) {
-        // Si existen productos que coinciden
-        skusBase = skusEncontrados.map((r) => r.sku);
-      } else {
-        // 🔥 NUEVO: verificar si el código existe en equivalencias aunque no exista producto
-        const existeEnEquivalencias = await this.prisma.$queryRaw<
-          { codigo: string }[]
-        >`
-    SELECT codigo
-    FROM equivalencia_codigos
-    WHERE UPPER(
-      REGEXP_REPLACE(codigo, '[^A-Z0-9]', '', 'g')
-    ) = ${qLoose}
-    LIMIT 1
-  `;
+        const codigosSet = new Set<string>();
 
-        if (existeEnEquivalencias.length) {
-          skusBase = [qLoose];
+        for (const row of skusEncontrados) {
+          const skuLoose = this.normalizeSkuLoose(row.sku);
+
+          // agregar el propio SKU
+          codigosSet.add(skuLoose);
+
+          // obtener grupo de equivalencias de cada SKU
+          const grupo = await this.obtenerGrupoEquivalencias(row.sku);
+
+          for (const codigo of grupo) {
+            codigosSet.add(this.normalizeSkuLoose(codigo));
+          }
         }
-      }
 
-      if (skusBase.length) {
-        // 2️⃣ Obtener todos los códigos equivalentes en una sola consulta
-        const codigosBuscar = await this.obtenerEquivalenciasMasivas(skusBase);
+        const codigosBuscar = Array.from(codigosSet);
 
         type ProductoRow = {
           sku: string;
           [key: string]: any;
         };
 
-        // 3️⃣ Traer productos existentes de ese grupo
         const data = await this.prisma.$queryRaw<ProductoRow[]>`
       SELECT *
       FROM productos
@@ -241,22 +210,27 @@ export class ProductosService {
       AND (${stock} IS NULL OR hay_stock = ${stock})
     `;
 
-        const encontradosLoose = data.map((p) => this.normalizeSkuLoose(p.sku));
+        if (data.length) {
+          // calcular equivalencias globales
+          const encontradosLoose = data.map((p) =>
+            this.normalizeSkuLoose(p.sku),
+          );
 
-        equivalencias = codigosBuscar.filter(
-          (c) => !encontradosLoose.includes(c),
-        );
+          equivalencias = codigosBuscar.filter(
+            (c) => !encontradosLoose.includes(c),
+          );
 
-        return {
-          page,
-          limit: data.length,
-          total: data.length,
-          q,
-          codigoBuscado,
-          equivalencias,
-          sugerencias: [],
-          data,
-        };
+          return {
+            page,
+            limit: data.length,
+            total: data.length,
+            q,
+            codigoBuscado,
+            equivalencias,
+            sugerencias: [],
+            data,
+          };
+        }
       }
     }
 
