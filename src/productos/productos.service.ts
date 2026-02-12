@@ -168,64 +168,69 @@ export class ProductosService {
       const qLoose = this.normalizeSkuLoose(q);
       codigoBuscado = qLoose;
 
-      let grupo = await this.obtenerGrupoEquivalencias(q);
-      let skuBaseEncontrado: string | null = null;
-
-      // 🔑 Resolver primero un SKU real si el código no existe
-      if (!grupo.length) {
-        const base = await this.prisma.$queryRaw<{ sku: string }[]>`
+      // 1️⃣ Buscar TODOS los SKUs que contengan el fragmento
+      const skusEncontrados = await this.prisma.$queryRaw<{ sku: string }[]>`
     SELECT sku
     FROM productos
     WHERE UPPER(
       REGEXP_REPLACE(sku, '[^A-Z0-9]', '', 'g')
     ) LIKE '%' || ${qLoose} || '%'
-    LIMIT 1
   `;
 
-        if (base[0]?.sku) {
-          skuBaseEncontrado = base[0].sku;
-          grupo = await this.obtenerGrupoEquivalencias(base[0].sku);
+      if (skusEncontrados.length) {
+        const codigosSet = new Set<string>();
+
+        for (const row of skusEncontrados) {
+          const skuLoose = this.normalizeSkuLoose(row.sku);
+
+          // agregar el propio SKU
+          codigosSet.add(skuLoose);
+
+          // obtener grupo de equivalencias de cada SKU
+          const grupo = await this.obtenerGrupoEquivalencias(row.sku);
+
+          for (const codigo of grupo) {
+            codigosSet.add(this.normalizeSkuLoose(codigo));
+          }
         }
-      }
 
-      const codigosBuscar =
-        grupo.length > 0
-          ? grupo.map((c) => this.normalizeSkuLoose(c))
-          : skuBaseEncontrado
-            ? [this.normalizeSkuLoose(skuBaseEncontrado)]
-            : [qLoose];
+        const codigosBuscar = Array.from(codigosSet);
 
-      type ProductoRow = {
-        sku: string;
-        [key: string]: any;
-      };
-
-      const data = await this.prisma.$queryRaw<ProductoRow[]>`
-        SELECT *
-        FROM productos
-        WHERE UPPER(
-          REGEXP_REPLACE(sku, '[^A-Z0-9]', '', 'g')
-        ) = ANY (${codigosBuscar})
-        AND (${stock} IS NULL OR hay_stock = ${stock})
-      `;
-
-      if (data.length) {
-        const skuBase = this.normalizeSkuLoose(data[0].sku);
-
-        equivalencias = grupo.filter(
-          (c) => this.normalizeSkuLoose(c) !== skuBase,
-        );
-
-        return {
-          page,
-          limit: data.length,
-          total: data.length,
-          q,
-          codigoBuscado,
-          equivalencias,
-          sugerencias: [],
-          data,
+        type ProductoRow = {
+          sku: string;
+          [key: string]: any;
         };
+
+        const data = await this.prisma.$queryRaw<ProductoRow[]>`
+      SELECT *
+      FROM productos
+      WHERE UPPER(
+        REGEXP_REPLACE(sku, '[^A-Z0-9]', '', 'g')
+      ) = ANY (${codigosBuscar})
+      AND (${stock} IS NULL OR hay_stock = ${stock})
+    `;
+
+        if (data.length) {
+          // calcular equivalencias globales
+          const encontradosLoose = data.map((p) =>
+            this.normalizeSkuLoose(p.sku),
+          );
+
+          equivalencias = codigosBuscar.filter(
+            (c) => !encontradosLoose.includes(c),
+          );
+
+          return {
+            page,
+            limit: data.length,
+            total: data.length,
+            q,
+            codigoBuscado,
+            equivalencias,
+            sugerencias: [],
+            data,
+          };
+        }
       }
     }
 
