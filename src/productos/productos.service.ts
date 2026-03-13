@@ -113,16 +113,46 @@ export class ProductosService {
     if (!dto.items?.length)
       throw new BadRequestException('No se enviaron items');
 
+    const normalizedItems = dto.items.map((i) => ({
+      sku: this.normalizeCodigo(i.sku),
+      precio: i.precio,
+    }));
+
+    const skus = normalizedItems
+      .map((i) => i.sku)
+      .filter((sku): sku is string => sku !== null);
+
+    // buscar cuales existen
+    const productosExistentes = await this.prisma.productos.findMany({
+      where: { sku: { in: skus } },
+      select: { sku: true },
+    });
+
+    const existingSkus = new Set(productosExistentes.map((p) => p.sku));
+
+    const itemsParaActualizar = normalizedItems.filter((i) =>
+      existingSkus.has(i.sku),
+    );
+
+    const skusNoEncontrados = normalizedItems
+      .filter((i) => !existingSkus.has(i.sku))
+      .map((i) => i.sku);
+
     const res = await this.prisma.$transaction(
-      dto.items.map((i) =>
+      itemsParaActualizar.map((i) =>
         this.prisma.productos.updateMany({
-          where: { sku: this.normalizeCodigo(i.sku) },
+          where: { sku: i.sku },
           data: { precio: i.precio },
         }),
       ),
     );
 
-    return { updated: res.reduce((a, b) => a + b.count, 0) };
+    const updated = res.reduce((a, b) => a + b.count, 0);
+
+    return {
+      updated,
+      notFound: skusNoEncontrados,
+    };
   }
 
   async findAll() {
