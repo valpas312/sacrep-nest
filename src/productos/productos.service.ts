@@ -108,41 +108,52 @@ export class ProductosService {
   }
 
   async batchUpdatePreciosBySku(dto: {
-    items: { sku: string; precio: number }[];
+    items: { sku: string; marca: number; precio: number }[];
   }) {
     if (!dto.items?.length)
       throw new BadRequestException('No se enviaron items');
 
     const normalizedItems = dto.items.map((i) => ({
       sku: this.normalizeCodigo(i.sku),
+      marca: i.marca,
       precio: i.precio,
     }));
 
-    const skus = normalizedItems
-      .map((i) => i.sku)
-      .filter((sku): sku is string => sku !== null);
-
-    // buscar cuales existen
     const productosExistentes = await this.prisma.productos.findMany({
-      where: { sku: { in: skus } },
-      select: { sku: true },
+      where: {
+        OR: normalizedItems.map((i) => ({
+          sku: i.sku,
+          marca: i.marca,
+        })),
+      },
+      select: {
+        sku: true,
+        marca: true,
+      },
     });
 
-    const existingSkus = new Set(productosExistentes.map((p) => p.sku));
-
-    const itemsParaActualizar = normalizedItems.filter((i) =>
-      existingSkus.has(i.sku),
+    const existingKeys = new Set(
+      productosExistentes.map((p) => `${p.sku}_${p.marca}`),
     );
 
-    const skusNoEncontrados = normalizedItems
-      .filter((i) => !existingSkus.has(i.sku))
-      .map((i) => i.sku);
+    const itemsParaActualizar = normalizedItems.filter((i) =>
+      existingKeys.has(`${i.sku}_${i.marca}`),
+    );
+
+    const itemsNoEncontrados = normalizedItems.filter(
+      (i) => !existingKeys.has(`${i.sku}_${i.marca}`),
+    );
 
     const res = await this.prisma.$transaction(
       itemsParaActualizar.map((i) =>
         this.prisma.productos.updateMany({
-          where: { sku: i.sku },
-          data: { precio: i.precio },
+          where: {
+            sku: i.sku,
+            marca: i.marca,
+          },
+          data: {
+            precio: i.precio,
+          },
         }),
       ),
     );
@@ -151,7 +162,10 @@ export class ProductosService {
 
     return {
       updated,
-      notFound: skusNoEncontrados,
+      notFound: itemsNoEncontrados.map((i) => ({
+        sku: i.sku,
+        marca: i.marca,
+      })),
     };
   }
 
