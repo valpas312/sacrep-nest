@@ -3,6 +3,7 @@ import { Type } from 'class-transformer';
 import {
   ArrayMinSize,
   IsArray,
+  IsInt,
   IsNumber,
   IsString,
   Min,
@@ -13,6 +14,11 @@ export class UpdatePrecioBySkuItemDto {
   @ApiProperty({ example: 'LUK-6001' })
   @IsString()
   sku: string;
+
+  @ApiProperty({ example: 1 })
+  @Type(() => Number)
+  @IsInt()
+  marca: number;
 
   @ApiProperty({ example: 125000 })
   @Type(() => Number)
@@ -25,8 +31,8 @@ export class BatchUpdatePreciosBySkuDto {
   @ApiProperty({
     type: [UpdatePrecioBySkuItemDto],
     example: [
-      { sku: 'LUK-6001', precio: 125000 },
-      { sku: '3DF7100', precio: 99000 },
+      { sku: 'LUK-6001', marca: 1, precio: 125000 },
+      { sku: '3DF7100', marca: 2, precio: 99000 },
     ],
   })
   @IsArray()
