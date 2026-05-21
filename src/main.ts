@@ -3,11 +3,24 @@ import { AppModule } from './app.module';
 import { DocumentBuilder, SwaggerModule } from '@nestjs/swagger';
 import { ValidationPipe } from '@nestjs/common';
 
+const allowedCorsOrigins = new Set([
+  'https://sac-repuestos.com.ar',
+  'https://6000-firebase-studio-1764450840999.cluster-f73ibkkuije66wssuontdtbx6q.cloudworkstations.dev',
+]);
+
+function normalizeOrigin(origin: string) {
+  return origin.replace(/\/$/, '');
+}
+
 async function bootstrap() {
   const app = await NestFactory.create(AppModule);
 
   app.enableCors({
-    origin: '*',
+    origin(origin, callback) {
+      if (!origin) return callback(null, false);
+
+      callback(null, allowedCorsOrigins.has(normalizeOrigin(origin)));
+    },
     methods: 'GET,POST,PATCH,DELETE',
   });
 
