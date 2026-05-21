@@ -201,12 +201,16 @@ export class ProductosService {
   // =========================
   async buscar(params: BuscarProductosDto) {
     const { q, stock, page = 1, limit = 20 } = params;
+    const currentPage = Math.max(Number(page) || 1, 1);
+    const pageSize = Math.min(Math.max(Number(limit) || 20, 1), 100);
+    const skip = (currentPage - 1) * pageSize;
+    const stockFilter = stock ?? null;
 
     let codigoBuscado: string | null = null;
     let equivalencias: string[] = [];
 
     // =========================
-    // BÚSQUEDA POR CÓDIGO / EQUIVALENCIA
+    // BUSQUEDA POR CODIGO / EQUIVALENCIA
     // =========================
     if (q && this.pareceCodigo(q)) {
       const qLoose = this.normalizeSkuLoose(q);
@@ -214,9 +218,6 @@ export class ProductosService {
 
       const codigosSet = new Set<string>();
 
-      // ===============================
-      // 1️⃣ Buscar coincidencias directas en productos
-      // ===============================
       const skusEncontrados = await this.prisma.$queryRaw<{ sku: string }[]>`
     SELECT sku
     FROM productos
@@ -235,9 +236,6 @@ export class ProductosService {
         }
       }
 
-      // ===============================
-      // 2️⃣ 🔥 NUEVO: buscar si el término existe como equivalencia
-      // ===============================
       const gruposDesdeEquivalencia =
         await this.prisma.equivalencia_codigos.findMany({
           where: { codigo: qLoose },
@@ -271,7 +269,9 @@ export class ProductosService {
       WHERE UPPER(
         REGEXP_REPLACE(sku, '[^A-Z0-9]', '', 'g')
       ) = ANY (${codigosBuscar})
-      AND (${stock} IS NULL OR hay_stock = ${stock})
+      AND (${stockFilter} IS NULL OR hay_stock = ${stockFilter})
+      OFFSET ${skip}
+      LIMIT ${pageSize}
     `;
 
         if (data.length) {
@@ -284,8 +284,8 @@ export class ProductosService {
           );
 
           return {
-            page,
-            limit: data.length,
+            page: currentPage,
+            limit: pageSize,
             total: data.length,
             q,
             codigoBuscado,
@@ -298,7 +298,7 @@ export class ProductosService {
     }
 
     // =========================
-    // BÚSQUEDA TEXTO / FILTROS
+    // BUSQUEDA TEXTO / FILTROS
     // =========================
     const terms =
       q
@@ -309,13 +309,11 @@ export class ProductosService {
 
     const andFilters: Prisma.productosWhereInput[] = [];
 
-    // 🔹 filtros estructurales
     if (params.marca) andFilters.push({ marca: params.marca });
     if (params.categoria) andFilters.push({ categoria: params.categoria });
     if (params.fabricante) andFilters.push({ fabricante: params.fabricante });
     if (stock !== undefined) andFilters.push({ hay_stock: stock });
 
-    // 🔹 búsqueda textual SOLO si hay terms
     if (terms.length > 0) {
       andFilters.push({
         AND: terms.map((term) => ({
@@ -337,14 +335,38 @@ export class ProductosService {
       });
     }
 
-    const data = await this.prisma.productos.findMany({
-      where: andFilters.length > 0 ? { AND: andFilters } : undefined,
-    });
+    const where = andFilters.length > 0 ? { AND: andFilters } : undefined;
+
+    if (terms.length === 0) {
+      const [total, data] = await this.prisma.$transaction([
+        this.prisma.productos.count({ where }),
+        this.prisma.productos.findMany({
+          where,
+          skip,
+          take: pageSize,
+          orderBy: { id: 'asc' },
+          include: { fabricantes: true, categorias: true, marcas: true },
+        }),
+      ]);
+
+      return {
+        page: currentPage,
+        limit: pageSize,
+        total,
+        q,
+        codigoBuscado,
+        equivalencias: [],
+        sugerencias: [],
+        data,
+      };
+    }
+
+    const data = await this.prisma.productos.findMany({ where });
 
     if (!data.length) {
       return {
-        page,
-        limit,
+        page: currentPage,
+        limit: pageSize,
         total: 0,
         q,
         codigoBuscado,
@@ -354,7 +376,6 @@ export class ProductosService {
       };
     }
 
-    // 🔹 Calcular equivalencias igual que en búsqueda por código
     const codigosSet = new Set<string>();
 
     for (const producto of data) {
@@ -373,7 +394,6 @@ export class ProductosService {
 
     const codigosBuscar = Array.from(codigosSet);
 
-    // Traer productos equivalentes que no estén ya en data
     type ProductoRow = {
       sku: string;
       [key: string]: any;
@@ -385,7 +405,9 @@ export class ProductosService {
   WHERE UPPER(
     REGEXP_REPLACE(sku, '[^A-Z0-9]', '', 'g')
   ) = ANY (${codigosBuscar})
-  AND (${stock} IS NULL OR hay_stock = ${stock})
+  AND (${stockFilter} IS NULL OR hay_stock = ${stockFilter})
+  OFFSET ${skip}
+  LIMIT ${pageSize}
 `;
 
     const encontradosLoose = data.map((p) => this.normalizeSkuLoose(p.sku));
@@ -393,8 +415,8 @@ export class ProductosService {
     equivalencias = codigosBuscar.filter((c) => !encontradosLoose.includes(c));
 
     return {
-      page,
-      limit: equivalentes.length,
+      page: currentPage,
+      limit: pageSize,
       total: equivalentes.length,
       q,
       codigoBuscado,
