@@ -70,8 +70,10 @@ export class ProductosService {
   // CREATE / UPDATE / DELETE
   // =========================
   async create(data: CreateProductoDto) {
+    const { equivalencias: _equivalencias, ...productoData } = data;
+
     return this.prisma.productos.create({
-      data: { ...data, sku: this.normalizeCodigo(data.sku) },
+      data: { ...productoData, sku: this.normalizeCodigo(data.sku) },
       include: { fabricantes: true, categorias: true, marcas: true },
     });
   }
@@ -81,11 +83,13 @@ export class ProductosService {
       throw new BadRequestException('No se enviaron productos');
 
     const created = await this.prisma.$transaction(
-      dto.productos.map((p) =>
-        this.prisma.productos.create({
-          data: { ...p, sku: this.normalizeCodigo(p.sku) },
-        }),
-      ),
+      dto.productos.map((p) => {
+        const { equivalencias: _equivalencias, ...productoData } = p;
+
+        return this.prisma.productos.create({
+          data: { ...productoData, sku: this.normalizeCodigo(p.sku) },
+        });
+      }),
     );
 
     return { count: created.length, data: created };
@@ -429,10 +433,12 @@ export class ProductosService {
   async update(id: number, data: UpdateProductoDto) {
     await this.findOne(id);
 
+    const { equivalencias: _equivalencias, ...productoData } = data;
+
     return this.prisma.productos.update({
       where: { id },
       data: {
-        ...data,
+        ...productoData,
         sku: data.sku ? this.normalizeCodigo(data.sku) : undefined,
       },
     });
