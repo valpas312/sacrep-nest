@@ -25,8 +25,8 @@ export class ProductosService {
   }
 
   private normalizeSkuLoose(value: string | null) {
-    return (value ?? '').replace(/[^A-Z0-9]/gi, '').toUpperCase();
-  }
+  return (value ?? '').replace(/[^A-Z0-9.\-]/gi, '').toUpperCase();
+}
 
   private pareceCodigo(term: string) {
     return /[0-9]/.test(term);
@@ -223,12 +223,12 @@ export class ProductosService {
       const codigosSet = new Set<string>();
 
       const skusEncontrados = await this.prisma.$queryRaw<{ sku: string }[]>`
-    SELECT sku
-    FROM productos
-    WHERE UPPER(
-      REGEXP_REPLACE(sku, '[^A-Z0-9]', '', 'g')
-    ) LIKE ${'%' + qLoose + '%'}
-  `;
+  SELECT sku
+  FROM productos
+  WHERE UPPER(
+    REGEXP_REPLACE(sku, '[^A-Z0-9.\-]', '', 'g')
+  ) LIKE ${'%' + qLoose + '%'}
+`;
 
       for (const row of skusEncontrados) {
         const skuLoose = this.normalizeSkuLoose(row.sku);
@@ -271,8 +271,8 @@ export class ProductosService {
       SELECT *
       FROM productos
       WHERE UPPER(
-        REGEXP_REPLACE(sku, '[^A-Z0-9]', '', 'g')
-      ) = ANY (${codigosBuscar})
+    REGEXP_REPLACE(sku, '[^A-Z0-9.\-]', '', 'g')
+  ) = ANY (${codigosBuscar})
       AND (${stockFilter} IS NULL OR hay_stock = ${stockFilter})
       OFFSET ${skip}
       LIMIT ${pageSize}
@@ -407,7 +407,7 @@ export class ProductosService {
   SELECT *
   FROM productos
   WHERE UPPER(
-    REGEXP_REPLACE(sku, '[^A-Z0-9]', '', 'g')
+    REGEXP_REPLACE(sku, '[^A-Z0-9.\-]', '', 'g')
   ) = ANY (${codigosBuscar})
   AND (${stockFilter} IS NULL OR hay_stock = ${stockFilter})
   OFFSET ${skip}
